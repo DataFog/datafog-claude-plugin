@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v datafog-hook >/dev/null 2>&1; then exec datafog-hook; elif command -v uvx >/dev/null 2>&1; then exec uvx --from 'datafog>=4.6.0' datafog-hook; else echo 'datafog plugin: engine not installed — run: pip install datafog' >&2; exit 1; fi",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/run-hook.sh\" warn",
             "timeout": 15,
             "statusMessage": "DataFog PII firewall scan"
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v datafog-hook >/dev/null 2>&1; then exec datafog-hook; elif command -v uvx >/dev/null 2>&1; then exec uvx --from 'datafog>=4.6.0' datafog-hook; else exit 0; fi",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/run-hook.sh\" silent",
             "timeout": 15
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v datafog-hook >/dev/null 2>&1; then exec datafog-hook; elif command -v uvx >/dev/null 2>&1; then exec uvx --from 'datafog>=4.6.0' datafog-hook; else exit 0; fi",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/run-hook.sh\" silent",
             "timeout": 15
           }
         ]

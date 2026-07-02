@@ -5,5 +5,9 @@
   "author": {
     "name": "DataFog",
     "url": "https://datafog.ai"
-  }
+  },
+  "homepage": "https://datafog.ai",
+  "repository": "https://github.com/DataFog/datafog-claude-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["pii", "privacy", "security", "dlp", "firewall", "hooks"]
 }

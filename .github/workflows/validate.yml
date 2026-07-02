@@ -1,0 +1,33 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JSON files parse
+        run: |
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json; do
+            jq empty "$f" && echo "ok: $f"
+          done
+
+      - name: Hook script syntax and exec bit
+        run: |
+          sh -n scripts/run-hook.sh
+          test -x scripts/run-hook.sh
+
+      # PATH is emptied so the test is deterministic even if the runner
+      # image ships uvx; the script only uses shell builtins.
+      - name: Hook script exits clean without engine
+        run: |
+          echo '{}' | env PATH=/nonexistent /bin/sh scripts/run-hook.sh silent
+          if echo '{}' | env PATH=/nonexistent /bin/sh scripts/run-hook.sh warn; then
+            echo "expected warn mode to exit 1 when engine missing" >&2
+            exit 1
+          fi
