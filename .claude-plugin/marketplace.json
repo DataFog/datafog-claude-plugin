@@ -1,0 +1,14 @@
+{
+  "name": "datafog",
+  "owner": {
+    "name": "DataFog",
+    "url": "https://github.com/DataFog"
+  },
+  "plugins": [
+    {
+      "name": "datafog",
+      "source": "./",
+      "description": "Offline PII firewall for Claude Code agent sessions"
+    }
+  ]
+}

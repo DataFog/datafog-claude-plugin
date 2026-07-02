@@ -1,0 +1,9 @@
+{
+  "name": "datafog",
+  "description": "Offline PII firewall for Claude Code: blocks or flags emails, phone numbers, credit cards, and SSNs in tool calls before data leaves your machine. ~70ms per check, zero network calls.",
+  "version": "0.1.0",
+  "author": {
+    "name": "DataFog",
+    "url": "https://datafog.ai"
+  }
+}
