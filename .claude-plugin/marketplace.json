@@ -1,5 +1,8 @@
 {
   "name": "datafog",
+  "metadata": {
+    "description": "DataFog plugins for Claude Code: offline PII detection and redaction for agent sessions"
+  },
   "owner": {
     "name": "DataFog",
     "url": "https://github.com/DataFog"
