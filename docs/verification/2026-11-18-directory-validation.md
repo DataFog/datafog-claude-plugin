@@ -113,3 +113,38 @@ when a supported publisher/review path is established and blocking validation is
 resolved. Then validate the intended immutable release, migrate the old entry as
 instructed, complete accurate listing/data handling, submit, and observe approval
 before publishing. Existing settings remain Code-only and auto-publish off.
+
+## Direct-launch comparison, same day
+
+The unpublished `directory-submission-followup` branch was validated at
+[`bb5c59b8d843f81267c435b4efb9add1743fc36e`](https://github.com/DataFog/datafog-claude-plugin/commit/bb5c59b8d843f81267c435b4efb9add1743fc36e).
+Its production change invokes the existing executable launcher directly from
+hooks and MCP rather than supplying `sh` as the program. The branch also contains
+this evidence document and associated tests. The form visibly confirmed that SHA.
+
+| Result | Released 0.2.1 | Direct-launch branch |
+| --- | --- | --- |
+| Blocking findings | 4 | 4 |
+| Warnings | 12 | 12 |
+| Policy holds | 21 | 21 |
+| Checks passed | 5 of 7 | 5 of 7 |
+| Computed-command path blocker | Present, location `.` | Still present, location `.` |
+| Three Verified-organization blockers | Present | Unchanged |
+| MCP shell-command inspection hold | Present | Removed |
+| Credential heuristic holds | 7 | 8 |
+
+The additional credential heuristic finding is in this evidence document: it flags
+the prose describing the isolated key-store search. Thus unchanged total holds do
+not mean the individual findings are identical. The direct-launch change removes
+one MCP hold but does **not** resolve the unexplained computed-path blocker.
+
+The interpreter/file-extension informational group is replaced by
+`START_FILE_AS_PROGRAM`, reporting that a hook/server starts the plugin file
+without naming an interpreter. It is still a note, not a blocker; the group shows
+four entries including an aggregate that reports five underlying findings.
+No other warning or hold category changed.
+
+This comparison is not grounds to publish a new release claiming the blocker is
+fixed. The existing entry continues tracking `v0.2.1`; the comparison branch was
+neither submitted nor released. The new form remains open on the comparison
+report with auto-publish off. The release report above is retained as the baseline.
