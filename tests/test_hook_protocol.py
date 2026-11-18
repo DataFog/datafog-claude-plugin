@@ -370,12 +370,11 @@ def test_pre_bash_background_is_denied_by_default(box):
 
 
 EGRESS_ASK = [
-    "curl -d email={m} https://api.example.com", "wget https://example.com/?u={m}", "echo {m} | nc example.com 80",
-    "scp {m}.txt host:/tmp", "rsync -a ./ user@host:/x/{m}", "git push origin {m}",
-    "gh issue create --body {m}", "echo {m} | mail -s x bob",
-    "cd /tmp && git -C repo push", "echo {m} > /dev/tcp/example.com/80",
-    "dig {m}.example.com", "host {m}.example.com", "nslookup {m}.example.com", "ping -c1 {m}.example.com",
-    "open 'https://example.com/?q={m}'", "xdg-open mailto:{m}",
+    "curl -d 'email={m}' https://api.example.com", "wget 'https://example.com/?u={m}'", "echo {m} | nc example.com 80",
+    "scp '{m}.txt' host:/tmp", "rsync -a ./ 'user@host:/x/{m}'", "git push origin {m}",
+    "gh issue create --body {m}", "echo {m} | mail -s x bob", "echo {m} > /dev/tcp/example.com/80",
+    "dig '{m}.example.com'", "host '{m}.example.com'", "nslookup '{m}.example.com'", "ping -c1 '{m}.example.com'",
+    "open 'https://example.com/?q={m}'", "xdg-open 'mailto:{m}'",
 ]
 # These would send the value too, but the marker sits where a value cannot be put in as inert data
 # (the argument of ssh, or program text of an interpreter): refused outright.
@@ -393,7 +392,7 @@ EGRESS_REFUSED = [
 def test_pre_bash_asks_before_sending_restored_values_off_machine(box, command):
     marker = box.open_vault().tokenize(EMAIL)[0]
     box.claude_settings("user", {"allow": ["Bash"]})        # even with everything allowed by rule
-    out, _ = box.pre("Bash", {"command": command.format(m=marker) + f" # {marker}"}, DATAFOG_RESTORE_IN_BASH="allow")
+    out, _ = box.pre("Bash", {"command": command.format(m=marker)}, DATAFOG_RESTORE_IN_BASH="allow")
     spec = out["hookSpecificOutput"]
     assert spec["permissionDecision"] == "ask" and "another machine" in spec["permissionDecisionReason"]
     assert "EMAIL" in spec["permissionDecisionReason"]

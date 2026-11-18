@@ -40,9 +40,12 @@ MARKER_NOTE = (
     "output and tool results are replaced by markers such as [[EMAIL_ABC123]] before you see them. "
     "A marker stands for one real value. Rules: (1) Treat a marker as the value itself and copy it "
     "exactly, including the double brackets, whenever you write it to a file, a command or a tool "
-    "input; it is swapped back to the real value locally (in Bash commands only if the user allows it, and only "
-    "where the marker is a plain or quoted argument of a simple command: not as a command name, a redirection "
-    "target, or inside eval, sh -c, xargs, ssh, awk, sed or similar). (2) "
+    "input; it is swapped back to the real value locally. In Bash commands that happens only if the user allows "
+    "it and only when the whole command is plain: programs with literal arguments joined by | && || ; with "
+    "redirections to literal paths, no $ variables or substitutions, no globs, backslashes, heredocs, loops, "
+    "assignments or cd, and the marker as a whole argument or inside a quoted argument ('...[[M]]...'). Not "
+    "with env, sudo, xargs, sh -c, eval, awk, sed, python or similar. Otherwise the command is refused: write "
+    "the value to a file with the Write tool and let the command read the file. (2) "
     "Never try to recover, guess or "
     "print the original value, and never ask the user for it. (3) The built-in Edit tool cannot "
     "match a line that contains a marker: to change such a line use the tool "
@@ -250,9 +253,9 @@ def pre_bash(session: Session, tool_input: dict, record: dict, permission_mode: 
         except shellsub.Refused as refusal:
             record["restore_refused"] = refusal.code
             return deny(f"DataFog: this command contains markers ({describe(known)}) in a place where the real "
-                        f"values cannot be put in safely: {refusal.text}. It was not run. Put the marker in a plain "
-                        "argument or a quoted string of a simple command, or write the values to a file with the "
-                        "Write tool and let the command read that file.")
+                        f"values cannot be put in safely: {refusal.text}. It was not run. Use a plain command with "
+                        "the marker as a whole or quoted argument, or write the values to a file with the Write tool "
+                        "and let the command read that file.")
         record["restore"] = dict(known)
         egress = egress or bashwrap.sends_data_off_machine(command)
         if egress and settings.egress_policy == "deny":
