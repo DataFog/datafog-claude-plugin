@@ -87,15 +87,24 @@ def key_state(vault_dir: str) -> str:
     """"ok", "missing" or "damaged" (present but shorter than a key). Never the key."""
     import os
     try:
-        return "ok" if os.path.getsize(os.path.join(vault_dir, KEY_FILE)) >= 32 else "damaged"
-    except OSError:
+        with open(os.path.join(vault_dir, KEY_FILE), "rb") as handle:
+            return "ok" if _usable(handle.read(64)) else "damaged"
+    except FileNotFoundError:
         return "missing"
+    except OSError:
+        return "damaged"
+
+
+def _usable(key: bytes) -> bool:
+    """A key is exactly 32 bytes and not all zero (a file a failed write left behind)."""
+    return len(key) == 32 and any(key)
 
 
 def _key(vault_dir: str, create: bool) -> bytes | None:
     """The signing key. Only the hook creates it (``create``); the runner never does.
 
-    A key file that is empty or too short (a crash or a full disk while it was written) is replaced
+    A key file that is not exactly 32 bytes, or is all zero (a crash or a full disk while it was written,
+    a truncated or padded copy), is replaced
     by the hook. If two hooks replace it at the same moment one of their tickets will not verify and
     that command is not run: fail closed, and the next attempt works.
     """
@@ -105,7 +114,7 @@ def _key(vault_dir: str, create: bool) -> bytes | None:
         try:
             with open(path, "rb") as handle:
                 key = handle.read()
-            if len(key) >= 32:
+            if _usable(key):
                 return key
             damaged = True
         except OSError:

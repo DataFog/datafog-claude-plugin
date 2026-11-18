@@ -197,69 +197,115 @@ What remains unavoidable while the command runs: a program the command starts wi
 as an argument has it in its own argument list (`ps` shows it to every user on the machine
 for as long as that program runs), and the shell that runs the command holds it in memory.
 
-**Values are inserted as data, never as shell syntax.** The model chooses the command and
-the quoting around a marker, and may have been manipulated into choosing it badly; whoever
-planted a value may have shaped it as an attack (`'; rm -rf ~; '`, `$(...)`). A lexer for
-bash and zsh works out the quoting context at each marker and writes the value in the one
-form that context cannot interpret:
+**Values are inserted as data, never as shell syntax, and only into plain commands.** The
+model chooses the command and the quoting around a marker, and may have been manipulated
+into choosing it badly; whoever planted a value may have shaped it as an attack
+(`'; rm -rf ~; '`, `$(...)`, `a[$(...)]`). Two reviews of earlier versions, which tried to
+recognise the dangerous shell constructs, each found another construct that ran a value:
+the common pattern was a value placed safely into a shell variable and then evaluated by
+the rest of the command. So the rule is the other way round. **A command that contains a
+marker is restored only if the whole command fits this grammar; otherwise it is refused as
+a whole and not run:**
 
-| Marker is | Example | Written as |
-| :- | :- | :- |
-| unquoted, an argument or part of one | `grep [[M]] f`, `--to=[[M]]` | `'value'`, every `'` as `'\''` |
-| in single quotes | `'a [[M]] b'` | the value in place, every `'` as `'\''` |
-| in double quotes | `"a [[M]] b"` | the double quote is closed, `'value'`, and opened again |
-| in `$'...'` | `$'a\t[[M]]'` | the value in place, `\` and `'` escaped |
-| in a heredoc with a quoted delimiter | `<<'EOF'` | the value in place |
-| in a heredoc with an unquoted delimiter | `<<EOF` | the value in place, `\`, `$` and backtick escaped |
-| in an assignment or `export NAME=` | `TOKEN=[[M]] ./deploy` | as above for its quoting |
-| in a here-string | `<<< "[[M]]"` | as above for its quoting |
-| inside `$( ... )`, backticks, `( ... )`, `{ ...; }`, `if`, `for`, a pipeline or list | | the lexer recurses; the rules above apply inside |
-| in a comment | `# [[M]]` | left as it is |
+1. **Plain commands only** (the same definition the permission code uses):
+   programs with literal arguments, joined by `|`, `&&`, `||`, `;` or newlines, with
+   redirections to and from literal paths (`> file`, `>> file`, `< file`, `2>&1`).
+   Arguments are bare text (letters, digits and `_ @ % + = : , . / -`), `'single-quoted'`
+   text, or `"double-quoted"` text without `$`, backtick or backslash; an argument may
+   start with `~/`.
+2. **No `$` at all outside single quotes**: no variables, no `$( )`, `${ }`, `$(( ))`,
+   `$'...'`. With no variable anywhere in the command, a value cannot be carried into a
+   place that evaluates it. Also no backticks, backslashes, line continuations, unquoted
+   `* ? [ ] { }`, `~user`, comments, heredocs, here-strings, subshells, `{ }` groups, loops,
+   conditionals, functions, assignments (`X=1 cmd`, `x=...`), or background `&`.
+3. **Every program in the command is on a short list.** Not only the program that gets the
+   marker: every simple command of the whole command. The name must be written bare
+   (`grep`) or as an absolute path in `/bin`, `/usr/bin`, `/usr/local/bin` or
+   `/opt/homebrew/bin` (`/usr/bin/grep`). `./grep`, `bin/grep`, `/tmp/grep` and `grep3` are
+   refused. The list:
 
-**The command is refused (not run, with a reason that names no value)** when a marker is:
-the command name or part of it; a redirection target or heredoc delimiter; directly after
-an unquoted `$` or a backslash; inside `${...}`, arithmetic, `[[ ]]`, `case`, an array or a
-function definition; in a heredoc if the value contains a newline or would form the
-delimiter line; an argument of a program that runs its arguments as a command or reads
-them as a program (`env`, `sudo`, `timeout`, `nohup`, `docker`, `make`, `awk`, `sed`,
-`sqlite3` and others); assigned to a variable that decides what code runs (`PATH`, `IFS`,
-`LD_PRELOAD` and others). It is also refused when the command contains, anywhere, something
-that evaluates text a second time: `eval`, `source`, `trap`, `sh`/`bash`/`zsh`, `xargs`,
-`ssh`, `python`/`perl`/`node`/`ruby`, arithmetic (`$(( ))`, `let`, `declare -i`), a command
-name that is a variable, and most shell builtins. A value containing a NUL byte is refused
-everywhere. Anything the lexer does not model with certainty is refused too. Refusal is
-the default on purpose; Claude is told to put the marker in a plain or quoted argument, or
-to write the value to a file with the Write tool and let the command read the file.
+   | May take a marker as an argument | Listed, but take no marker |
+   | :- | :- |
+   | `grep` `egrep` `fgrep` `rg` `cat` `head` `tail` `wc` `nl` `tac` `rev` `fold` `cut` `tr` `paste` `join` `comm` `cmp` `column` `diff` `ls` `stat` `basename` `dirname` `file` `sort` `printf` `true` `:` | `uniq` `tee` `cp` `mv` `mkdir` `touch` (they write to or create what an argument names, so a value would choose the path; they may stand elsewhere in the command, for example at the end of a pipeline) |
 
-This is tested under real bash, zsh and dash: about 90 hostile values in each of 42
-contexts, 300 random values per context, the same through the real runner, and random
-command shapes around markers, checking that the receiving program got exactly the value,
-that nothing inside a value ran, and that the exit status is the command's own.
+   Each was read option by option, GNU and BSD/macOS variants; the audit is a table in
+   `shellsub.py`. Options that make a listed program run another program or write where an
+   argument says are refused anywhere in a command with a marker, abbreviations included:
+   `rg --pre`, `--pre-glob`, `--hostname-bin`; `sort --compress-program`, `-o`/`--output`,
+   `-T`, `--files0-from`, `--random-source`; `file -m`, `-C`, `-f`.
+   **`printf` only as `printf 'FORMAT' arguments...` with a literal format made of ordinary
+   text, `\n`, `\t`, `%%` and `%s`.** Any other conversion (`%d`, `%x`, `%c`, `%b`, a `*`
+   width) is refused: zsh evaluates the argument of a numeric conversion as arithmetic.
+   **`echo` is not on the list**: zsh and dash interpret backslashes in its arguments, so a
+   value would not arrive byte for byte; use `printf '%s\n'`.
+   **No network program is on the list** (`curl`, `wget`, `ssh`, `scp`, `rsync`, `nc`, `git`
+   ...), and no interpreter, shell, `sed`, `awk`, `jq`, `find`, `xargs`, `env`, `sudo`,
+   `make` or pager. An earlier version refused "programs known to run their arguments" and
+   accepted the rest; a review then ran a value through `perl5.36 -e`,
+   `git -c alias.x=!cmd` and `tar --checkpoint-action=exec=`. The set of programs that can
+   run an argument has no end, so the list is of programs that cannot.
 
-Limits of the swap that no test removes:
+   **To use a real value with any other program**, Claude is told to write it to a file
+   with the Write tool (which restores markers locally) and let the program read the file.
 
-- **A value that starts with `-` is delivered exactly**, and the program may read it as an
-  option. Use `--` before it where the program supports that.
-- **The lists of wrapping and code-reading programs are finite.** A program outside them
-  that treats an argument as code (a query language, a template, a pattern) gets the value
-  as one argument and may interpret it.
-- **What the command does with a value afterwards is its own business.** `x=[[M]]; rm $x`
-  inserts the value safely, and then the shell splits `$x` into words.
-- **Shell start-up files** (`~/.zshenv`, `BASH_ENV`) that define aliases or change shell
-  options are not modelled. Options that change quoting (zsh `RC_QUOTES`) can alter the
-  value a program receives; they cannot make it run.
-- `printf` takes markers only after a literal format (`printf '%s\n' [[M]]`), and `cd` takes
-  none: a value must not become an option, a variable name or the working directory.
-- If neither bash nor zsh is available the runner uses `/bin/sh` and accepts fewer forms.
+   You can extend the list with the setting `restore_programs_extra` (exact program names,
+   for example `["mytool"]`). **By adding a name you vouch that this program treats its
+   arguments as data**: the plugin checks nothing about it, including its options. The
+   setting is read only from `config.json` in the plugin's data directory and from the
+   environment variable `DATAFOG_RESTORE_PROGRAMS_EXTRA`, never from the project, and the
+   plugin refuses Claude's attempts to write that file. Shells, shell builtins and programs
+   that only run other programs (`env`, `sudo`, `xargs`, `ssh` ...) cannot be added.
+4. **A marker is a whole argument or sits inside a quoted argument**: `grep [[M]] f`,
+   `grep '[[M]]' f`, `curl -H "Authorization: Bearer [[M]]" https://...`, `tool --to='[[M]]'`.
+   Not a command name, not a redirection target, and not glued to unquoted text
+   (`--to=[[M]]` is refused; quote it).
+5. **A value that would start an argument with `-` is refused unless a literal `--` stands
+   before it in the same command** (`grep -- [[M]] f`). After `--` programs take what
+   follows as operands, so a value like `-rf` or `-v` cannot be read as an option.
+6. A value containing a NUL byte is refused.
+
+The value is then written in the one form its place cannot interpret: as `'value'` with
+every `'` written as `'\''`; in place inside single quotes with the same escape; and inside
+double quotes by closing the quote, writing `'value'`, and opening it again.
+
+The refusal reason names no value. Claude is told to use a plain command with the marker
+as a whole or quoted argument, or to write the value to a file with the Write tool and let
+the command read the file. Compared with earlier versions this refuses much that used to
+work: markers in `$( )`, backticks, heredocs, here-strings, assignments, `export`, `for`,
+`if`, `( )`, `{ }`, `$'...'`, next to a comment, glued to other unquoted text, and with
+any program that is not on the list (`echo`, `curl`, `git`, `python`, `./script` ...).
+
+This is tested under real bash, zsh and dash: about 90 hostile values in each accepted
+context, 300 random values per context, the same through the real runner, every case from
+the reviews through the real runner with the value that ran in the review, and random
+command shapes around markers with values built to run a canary, checking that the
+receiving program got exactly the value, that nothing inside a value ran, and that the
+exit status is the command's own. The fuzz is itself tested against three deliberately
+broken grammars.
+
+Limits that no test removes:
+
+- **The audit of the listed programs is a reading of their manuals**, for the versions
+  named in `shellsub.py`. A version or a local build with an option that runs a program
+  would not be covered. A listed program reads the file a value names (`cat [[M]]`); your
+  Read deny rules are applied to the value for that reason.
+- **A program you add with `restore_programs_extra` is your responsibility.**
+- **Shell start-up files** (`~/.zshenv`, `BASH_ENV`) that turn a program name into an alias
+  or function are not modelled.
+- While the command runs, a program that was given the value has it in its argument list.
+- If neither bash nor zsh is available the runner uses `/bin/sh`; the grammar is the same.
+
 
 Grep and Glob patterns are always restored, through the tool input (see
 [Traces](#traces-left-in-claude-codes-records)). Note that match/no-match and match counts
 tell the model something about a value too.
 
-If a command with markers also looks like it sends data to another machine (`curl`, `wget`,
-`nc`, `scp`, `rsync`, `git push`, `gh`, `mail`, `dig`, `ping`, `open`, cloud CLIs, a URL in
-the command or in a value), you are asked even with `restore_in_bash: allow`, and with
-`egress_policy: deny` it is refused. This is a list of known programs, not a guarantee.
+Network programs are not on the list, so a command that gives a marker to `curl`, `wget`,
+`ssh`, `git push` and the like is refused, not asked about. If you add such a program with
+`restore_programs_extra`, or a value is itself a URL, the egress check still applies: a
+command with markers that looks like it sends data to another machine asks even with
+`restore_in_bash: allow`, and with `egress_policy: deny` it is refused. That check is a
+list of known programs and patterns, not a guarantee.
 
 ### Bash permissions
 
@@ -306,7 +352,9 @@ plugin read and from where.
    covers a path the command names: **ask**.
 4. The command contains known markers and `restore_in_bash` is `ask`: **ask**.
 5. The command contains known markers and looks like it sends data away: **ask**.
-6. The command is not a simple command: **ask**.
+6. The command is not plain, or is plain but not a simple command: **ask**. For a command
+   that is not plain this ask holds in every permission mode while you have any deny or ask
+   rule (see below).
 7. An allow rule matches the simple command: **allow**.
 8. Otherwise: **ask**.
 
@@ -324,29 +372,36 @@ redirection targets. It cannot do that inside the rewritten command, so the plug
 and more strictly:
 
 - **Every word of every sub-command is treated as a possible path**, not only the
-  arguments of known file commands: also redirection targets (`<`, `>`, `>>`, `>|`, `&>`,
-  `2>`), the part after `=` or `:` (`dd if=secret.env`, `--file=secret.env`) and a path
-  after `@`. Each is checked as written and with symbolic links resolved, against `Read`
+  arguments of known file commands: also redirection targets (`<`, `>`, `>>`, `&>`, `2>`),
+  the part after `=`, `:` or `,` (`dd if=secret.env`, `--file=secret.env`), a path after
+  `@`, and every tail of a short-option cluster (`grep -hfsecret.env`). Each is checked as written and with symbolic links resolved, against `Read`
   and `Edit` rules alike, since the plugin does not know whether a program reads or writes
   its operand. On macOS paths are compared without regard to case.
 - A **deny** rule that covers such a path denies the command in every mode, including
   `bypassPermissions`. An **ask** rule asks in every mode (and denies in `dontAsk`).
-- **When a path cannot be known before the command runs, the command is never approved
-  without a prompt**, in any mode, as long as you have at least one `Read` or `Edit` deny
-  or ask rule: a variable (`cat $F`), a substitution, a glob (`cat *.txt`; globs are also
-  expanded and each result checked), a brace expansion, a `cd` inside a compound command,
-  a command the plugin cannot parse, a covered path that is only mentioned inside a quoted
-  script (`sh -c '...'`, `python -c "..."`), and a directory operand that holds a covered
-  path or is too large to check (`grep -r x .`, `tar c .`; up to 3,000 entries are looked
-  at). The plugin asks here rather than denies: nothing shows that the covered file is
-  touched, and Claude Code documents these rules as best-effort for Bash.
+- **A directory the command names** is looked through (up to 3,000 entries): if it holds a
+  covered path, or is too large to check, the command asks in every mode (`grep -r x .`,
+  `tar c .`). So does a command that only mentions a covered path inside a quoted argument
+  (`sh -c '...'`, `python -c "..."`). The plugin asks here rather than denies: nothing
+  shows that the covered file is touched, and Claude Code documents these rules as
+  best-effort for Bash.
+- Relative paths are tried from the working directory and from every existing directory
+  the command names, so `tar -C sub ... ../secret.env`, `git -C`, `env --chdir=` and the
+  like are covered without a list of options. Paths are resolved by the filesystem
+  (symbolic links first, then `..`) and also normalised as text.
+- All of this is done for plain commands only. **A command that is not plain cannot be
+  cleared against your rules at all** (see "Plain commands" below).
 - Pattern syntax is Claude Code's: `//path` absolute, `~/path` from your home directory,
   `/path` relative to the settings source (the project directory for project and local
   settings, `~/.claude` for user settings), `path` or `./path` relative to the current
   directory; `*` and `?` within one path segment, `**` across directories. Stricter than
   documented: every relative pattern matches at any depth below the current directory,
-  `!` carve-outs are ignored (nothing is carved out), and a bare `Read` or `Edit` deny
-  rule covers every path, which denies nearly every Bash command.
+  `!` carve-outs are ignored (nothing is carved out), a pattern that names only its anchor
+  (`Read(~/)`, `Read(.)`, `Read(//)`) covers the anchor and everything below it, and a bare
+  `Read` or `Edit` deny rule covers every path, which denies nearly every Bash command.
+- **A pattern with a `..` segment is not supported.** The plugin cannot say what such a
+  rule covers, so while one exists no Bash command is approved without a prompt, in any
+  mode. `/datafog:doctor` lists such rules; rewrite them without `..`.
 
 What this still does not cover, as in Claude Code: a command that reads files without
 naming them (`grep -r pattern` with no path, `git grep`, `git diff`), and whatever a
@@ -354,19 +409,43 @@ program opens by itself (a script, a build, a test run). Rules given by command-
 flags, a server or MDM are invisible here like the Bash ones. A `Read` rule is therefore
 not a boundary around a file; a sandbox is.
 
-Having any `Read` or `Edit` deny rule makes every Bash command with a glob or a variable
-ask. That is the price of not letting such a command through unchecked.
+#### Plain commands
 
-**A "simple command" is deliberately narrow for now.** Exactly one command: no `;`, `&&`,
-`||`, `|` or `&`; no redirection (`<`, `>`), heredoc or process substitution; no subshell,
-`$( )` or backtick; no `{ }`; no leading `NAME=value`; no newline; no backslash outside
-single quotes; `$` only as `$NAME` or `${NAME}`; not starting with a shell keyword; at most
-10,000 characters. Anything may stand inside single quotes, and inside double quotes
-everything except `$(`, backtick and backslash. So `git commit -m "fix (scope): a; b"` is
-simple and `cat a.txt | head` is not. **A command that is not simple always asks, even if
-each part matches one of your allow rules.** Claude Code itself would approve
-`cat a.txt | head` when both parts are allowed; the plugin does not yet. This is the main
-source of extra prompts and is meant to be loosened later (`ccperms.is_simple`).
+Before anything else the plugin asks one question about a command: is it **plain**? The
+definition is the grammar in [Markers in Bash commands](#markers-in-bash-commands), points
+1 and 2, with these differences for commands without markers: the builtins `echo`, `printf`,
+`true`, `false`, `:`, `pwd`, `test`, `kill`, `wait`, `type`, `which` and `exit` may be used
+(this says the command can be read with certainty, not that those builtins are harmless:
+`test -v` and `printf -v` evaluate an operand under bash, so a wildcard allow rule does not
+approve those forms), other programs are not restricted (the short program list applies
+to marker restoration only), a descriptor in a redirection is one digit, and `cd`, `pushd` or `popd` is plain only as the single
+command of a call (`cd sub` is plain; `cd sub && make` is not, because after it relative
+paths mean something else). Commands longer than 20,000 characters are not plain.
+
+Only a plain command is understood with certainty: it is split into its sub-commands for
+your Bash rules, its paths are checked against your Read and Edit rules, and it can be
+approved by an allow rule. **A command that is not plain is never approved by a rule.**
+The plugin still scans its text, so a deny or ask rule that visibly applies does apply,
+but finding nothing proves nothing. Therefore:
+
+- with **no** deny or ask rule of any kind, a command that is not plain asks as before
+  (`bypassPermissions` runs it, `auto` leaves it to Claude Code);
+- with **any** `Bash`, `Read` or `Edit` deny or ask rule, a command that is not plain
+  asks in every permission mode, **including `bypassPermissions` and `auto`**, and is
+  denied in `dontAsk`. In a headless run (`claude -p`) such a command is denied.
+
+Not plain are, for example: `ls *.py`, `cat $F`, `echo "$HOME"`, `x=1; ...`, `FOO=1 make`,
+`cd a && make`, `for ...`, `if ...`, `$(...)`, a heredoc, a backslash, `cmd &`, a comment,
+`export ...`, `source ...`.
+
+**A "simple command" is deliberately narrow for now.** A plain command that is exactly one
+command, with no `|`, `&&`, `||` or `;`, no redirection and no newline, at most 10,000
+characters. So `git commit -m "fix (scope): a; b"` is simple; `cat a.txt | head` is plain
+but not simple; `ls *.py` is neither. **A plain command that is not simple asks, even if
+each part matches one of your allow rules** (`bypassPermissions` runs it). Claude Code
+itself would approve `cat a.txt | head` when both parts are allowed; the plugin does not
+yet. This is the main source of extra prompts and is meant to be loosened later
+(`ccperms.is_simple`).
 
 **Stricter than Claude Code, on purpose:**
 
@@ -386,8 +465,8 @@ source of extra prompts and is meant to be loosened later (`ccperms.is_simple`).
 - `Read` and `Edit` rules are applied to every word of a command, not only to the file
   commands Claude Code recognises; see above.
 - With `permissions.blockReadsOutsideWorkingDirectories` on, nothing is approved by rule.
-- Leading `NAME=value` makes a command not simple, also for variables Claude Code treats
-  as safe.
+- A command with a variable, a glob or a leading `NAME=value` is not plain, so no allow rule
+  applies to it, also where Claude Code would accept it.
 - Claude Code runs a built-in set of read-only commands (`ls`, `cat`, `grep` and others)
   without a rule. The plugin does not: add allow rules for the ones you use
   (`Bash(ls *)`, `Bash(cat *)`, `Bash(grep *)`, `Bash(git status)`).
@@ -398,9 +477,9 @@ source of extra prompts and is meant to be loosened later (`ccperms.is_simple`).
 | :- | :- |
 | `default`, `acceptEdits` | as decided above. The file commands `acceptEdits` approves by itself (`mkdir`, `mv`, `cp` ... inside the project) ask, because the plugin cannot check paths. |
 | `plan` | never `allow`; a command your rules allow asks. |
-| `auto` | deny and ask rules and marker commands as above; an exact allow rule allows; everything else is left to Claude Code, so its classifier reviews the rewritten command. |
+| `auto` | deny and ask rules and marker commands as above; an exact allow rule allows; a command that is not plain asks while you have any deny or ask rule; everything else is left to Claude Code, so its classifier reviews the rewritten command. |
 | `dontAsk` | every `ask` becomes `deny`, as that mode does. |
-| `bypassPermissions` | steps 6 and 8 become `allow`. Deny rules (Bash, Read, Edit) still deny; ask rules, marker commands (steps 4 and 5), `rm` of a possibly critical path, and a command that cannot be cleared against your Read and Edit rules still ask. |
+| `bypassPermissions` | steps 6 and 8 become `allow`, except for a command that is not plain while you have any deny or ask rule. Deny rules (Bash, Read, Edit) still deny; ask rules, marker commands (steps 4 and 5), `rm` of a possibly critical path, and a command that cannot be cleared against your Read and Edit rules still ask. |
 
 **Limits you should know:**
 
@@ -566,10 +645,16 @@ Design decisions that were considered and settled, so they are not reopened by a
 - **Late swap.** Bash commands are restored inside the runner at execution time, never in
   the hook's output. Before this, the restored command sat in the permission prompt, the
   transcript and the record of denied calls, even for a command you refused.
-- **Refuse rather than guess.** A marker in a place the lexer cannot classify with
-  certainty makes the whole command fail closed. The alternative, leaving that one marker
-  unrestored and running the rest, was rejected: the command would run with a mix of real
-  values and marker text and do something nobody intended.
+- **Accept only what is known plain** (replaces "refuse what is known dangerous"). Twice a
+  review ran a value, or reached a denied file, through a shell construct next to the one
+  that had just been fixed. Markers are now restored, sub-commands split and paths checked
+  only for commands that fit a small positive grammar; everything else is refused (for
+  markers) or never approved (for permissions). More refusals and prompts are the accepted
+  price. The alternative of restoring some markers and leaving others was rejected
+  earlier: a command would run with a mix of real values and marker text.
+- **Programs that may receive a value are an allow-list, not a deny-list**, and every
+  program in the command must be on it. `echo` and all network programs are off it on
+  purpose. One user setting extends it; nothing the model can write does.
 - **Double quotes are closed and reopened around a value** instead of escaping the value
   for double quotes, so no character of a value is ever read under double-quote rules.
 - **Bash permissions follow your Claude Code rules, read from the settings files**, and
@@ -616,14 +701,19 @@ Make `@file` mentions go through the Read tool, where the plugin can replace val
 
 Deny rules for the vault itself and for files you never want read, even as markers.
 Adjust the paths to your machine and projects. With the plugin on, these `Read` rules
-also apply to Bash commands that name such a path, in every permission mode (see
-[Read and Edit rules](#read-and-edit-rules-apply-to-bash-commands)). They do not block
-Bash as a whole: a command that names none of these paths is decided by your `Bash`
-rules as before. Two consequences to expect: a command with a glob or a variable in it
-asks instead of being approved by rule, and so does a command over a directory that
-holds one of these files (for example `grep -r x .` in a project with a `.env`).
-Do not add a bare `Read` or `Edit` deny rule (without a path): it covers every path
-and denies nearly every Bash command.
+also apply to Bash commands, in every permission mode (see
+[Read and Edit rules](#read-and-edit-rules-apply-to-bash-commands)). Say it plainly:
+
+- A plain command that names none of these paths is decided by your `Bash` rules as
+  before.
+- **With any of these rules in place, every Bash command that is not plain prompts, also
+  in `bypassPermissions` and `auto`, and is denied in headless runs (`claude -p`) and in
+  `dontAsk`.** That includes everyday forms such as `ls *.py`, `echo $HOME`,
+  `cd dir && make` and `FOO=1 make`. See [Plain commands](#plain-commands).
+- A command over a directory that holds one of these files asks (for example
+  `grep -r x .` in a project with a `.env`).
+- Do not add a bare `Read` or `Edit` deny rule (without a path): it covers every path and
+  denies nearly every Bash command. Do not use `..` in a pattern.
 
 ```json
 {
@@ -792,6 +882,7 @@ More settings go in `config.json` in the plugin's data directory
 | `restore_in_bash` | `DATAFOG_RESTORE_IN_BASH` | `ask` | Commands that contain markers: `ask` you first, `allow` (restore without asking), or `off` (never restore; markers stay as text). Values are put in by the runner, so this needs `bash_wrap: runner`. |
 | `background_bash` | `DATAFOG_BACKGROUND_BASH` | `deny` | `allow` wraps background commands like any other. |
 | `egress_policy` | `DATAFOG_EGRESS_POLICY` | `ask` | For commands with markers (and restoring not `off`) that look like they send data away: `ask`, `deny`, `allow`. |
+| `restore_programs_extra` | `DATAFOG_RESTORE_PROGRAMS_EXTRA` | none | Program names, in addition to the built-in list, that may receive real values in a Bash command. You vouch that each treats its arguments as data. Read from `config.json` and the environment only. See [Markers in Bash commands](#markers-in-bash-commands). |
 | `restore_in_mcp_input` | | `false` | Swap markers back in input to third-party MCP tools. Real values then leave this process. |
 | `vault_key` | `DATAFOG_VAULT_KEY` | `keystore` | Where the vault's key is kept: `keystore` (macOS Keychain, Linux Secret Service) or `file` (beside the vault; weaker, for machines without a key store). Fixed when the vault is created. See [The vault](#the-vault). |
 | `max_scan_bytes` | `DATAFOG_MAX_SCAN_BYTES` | 5 MiB | Larger files count as "cannot be checked". |
@@ -856,7 +947,7 @@ are new in this build. None has been run in a live session with this engine.
 - Behaviour when Claude Code's own Bash sandbox is enabled (the runner starts the command in a new session).
 - Anything on Windows.
 
-To run the live check on your machine (about 27 short headless `claude -p` runs in a
+To run the live check on your machine (about 29 short headless `claude -p` runs in a
 throwaway temp project with a temporary vault whose key is a file in the temp directory;
 your real vault and your Keychain are not touched; hard caps of 30 runs, 180 seconds each,
 30 minutes in total):
@@ -887,10 +978,10 @@ Service (its own D-Bus session and GNOME Keyring in a temp directory) and needs 
 
 Layout: `engine/datafog_guard/` (the engine; entry `python -m datafog_guard <hook|run|filter|mcp|status|purge|doctor>`),
 `scripts/` (launcher, environment bootstrap, shell wrapper), `hooks/hooks.json`,
-`.mcp.json`, `commands/`, `tests/`, `tests/live/`. For the vault: `store.py` (core's encrypted
+`.mcp.json`, `commands/`, `tests/`, `tests/live/`. For the vault: `store.py` (core’s encrypted
 application vault, the marker index, purge) and `vault.py` (finding values, assigning markers,
-restoring). For Bash: `shellsub.py` (the lexer that
-puts values into a command as data, with its threat note), `ccperms.py` (reading and applying
+restoring). For Bash: `plain.py` (the recogniser of plain commands), `shellsub.py` (puts values
+into a plain command as data), `ccperms.py` (reading and applying
 your Claude Code permission rules), `filtercmd.py` (the runner), `bashwrap.py` (the rewrite
 and the restore ticket).
 

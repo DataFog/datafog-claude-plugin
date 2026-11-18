@@ -40,9 +40,14 @@ MARKER_NOTE = (
     "output and tool results are replaced by markers such as [[EMAIL_ABC123]] before you see them. "
     "A marker stands for one real value. Rules: (1) Treat a marker as the value itself and copy it "
     "exactly, including the double brackets, whenever you write it to a file, a command or a tool "
-    "input; it is swapped back to the real value locally (in Bash commands only if the user allows it, and only "
-    "where the marker is a plain or quoted argument of a simple command: not as a command name, a redirection "
-    "target, or inside eval, sh -c, xargs, ssh, awk, sed or similar). (2) "
+    "input; it is swapped back to the real value locally. In Bash commands that happens only if the user allows "
+    "it and only in plain commands made of these programs: grep, egrep, fgrep, rg, cat, head, tail, wc, nl, tac, "
+    "rev, fold, cut, tr, paste, join, comm, cmp, column, diff, ls, stat, basename, dirname, file, sort, printf "
+    "(only printf '%s\\n' style formats), true; joined by | && || ; with redirections to literal paths; no $ "
+    "variables or substitutions, no globs, backslashes, heredocs, loops, assignments or cd; the marker as a whole "
+    "argument or inside a quoted argument, after a literal -- if the value might start with a dash "
+    "(grep -c -- [[M]] file). Any other program (curl, echo, python, sed, awk, git, your own scripts ...) with a "
+    "marker is refused: write the value to a file with the Write tool and let the program read the file. (2) "
     "Never try to recover, guess or "
     "print the original value, and never ask the user for it. (3) The built-in Edit tool cannot "
     "match a line that contains a marker: to change such a line use the tool "
@@ -183,6 +188,10 @@ def pre_write_like(session: Session, tool_input: dict, record: dict, fields, pat
     path = tool_input.get(path_key)
     if isinstance(path, str) and path and (files.is_inside(path, session.settings.vault_dir)):
         return deny("DataFog: files inside the vault cannot be written.")
+    if isinstance(path, str) and path and os.path.realpath(path) in [
+            os.path.realpath(name) for name in _own_config_files(session.settings)]:
+        return deny("DataFog: the plugin's own configuration files cannot be written by Claude; only you "
+                    "change those settings.")
     new_input, unknown = None, 0
     if _restore_allowed(session.settings, path):
         new_input, _, unknown = _restore_fields(session, tool_input, fields, record)
@@ -203,6 +212,24 @@ def _mentions_vault(text: str, settings) -> bool:
     return any(name and name in text for name in names)
 
 
+def _own_config_files(settings) -> list[str]:
+    return [os.path.join(settings.data_dir, name) for name in ("config.json", "runtime.json")]
+
+
+def _names_own_config(text: str, settings) -> bool:
+    """A cheap guard, like _mentions_vault: the model must not edit the plugin's settings (for example
+    restore_programs_extra, which says which programs may receive real values)."""
+    home = os.path.expanduser("~")
+    for path in _own_config_files(settings):
+        names = {path, os.path.realpath(path)}
+        for name in list(names):
+            if name.startswith(home + os.sep):
+                names.update({"~" + name[len(home):], "$HOME" + name[len(home):]})
+        if any(name in text for name in names):
+            return True
+    return False
+
+
 def pre_bash(session: Session, tool_input: dict, record: dict, permission_mode: str = "default", cwd: str = ""):
     settings = session.settings
     command = tool_input.get("command")
@@ -214,6 +241,9 @@ def pre_bash(session: Session, tool_input: dict, record: dict, permission_mode: 
                     "change this).")
     if _mentions_vault(command, settings):
         return deny("DataFog: commands that name the vault directory are refused; it holds the real values.")
+    if _names_own_config(command, settings):
+        return deny("DataFog: commands that name the plugin's own configuration files are refused; only you "
+                    "change those settings.")
     if len(command.encode("utf-8", "replace")) > 100_000:
         return deny("DataFog: this command is too long to run behind the output filter. Put it in a script file.")
     # Restoring markers lets the command compute on real values. That is needed for honest work
@@ -246,13 +276,14 @@ def pre_bash(session: Session, tool_input: dict, record: dict, permission_mode: 
             # A dry run of exactly what the runner will do. The result holds real values and is dropped.
             egress = bashwrap.sends_data_off_machine(
                 shellsub.substitute(command, [shellsub.Span(*item) for item in found],
-                                    shellsub.shell_kind(filtercmd.pick_shell())).text)
+                                    shellsub.shell_kind(filtercmd.pick_shell()),
+                                    settings.restore_programs_extra).text)
         except shellsub.Refused as refusal:
             record["restore_refused"] = refusal.code
             return deny(f"DataFog: this command contains markers ({describe(known)}) in a place where the real "
-                        f"values cannot be put in safely: {refusal.text}. It was not run. Put the marker in a plain "
-                        "argument or a quoted string of a simple command, or write the values to a file with the "
-                        "Write tool and let the command read that file.")
+                        f"values cannot be put in safely: {refusal.text}. It was not run. Use a plain command with "
+                        "the marker as a whole or quoted argument, or write the values to a file with the Write tool "
+                        "and let the command read that file.")
         record["restore"] = dict(known)
         egress = egress or bashwrap.sends_data_off_machine(command)
         if egress and settings.egress_policy == "deny":

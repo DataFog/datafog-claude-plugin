@@ -52,6 +52,10 @@ class Settings:
         self.egress_policy = "ask"                  # "ask" | "deny" | "allow"
         self.restore_in_mcp_input = False
         self.vault_key = "keystore"                 # "keystore" | "file" (weaker: the key lies beside the data)
+        # Programs the USER vouches for: "this program treats its arguments as data". Read from
+        # config.json in the plugin data dir and from DATAFOG_RESTORE_PROGRAMS_EXTRA only.
+        self.restore_programs_extra: frozenset[str] = frozenset()
+        self.recall_required = True
         self.keep_vault_on_uninstall = keep_vault_on_uninstall
         self.max_scan_bytes = 5 * MIB
         # config mistakes; they make the engine unhealthy
@@ -193,7 +197,8 @@ def load() -> Settings:
     directory = data_dir()
     merged: dict = {}
     merged.update(_read_json(os.path.join(directory, "runtime.json"), problems, "runtime.json"))
-    merged.update(_read_json(os.path.join(directory, "config.json"), problems, "config.json"))
+    own_config = _read_json(os.path.join(directory, "config.json"), problems, "config.json")
+    merged.update(own_config)
     merged.update(plugin_options_from_env())
     for name, key in ENV_OVERRIDES.items():
         if os.environ.get(name) not in (None, ""):
@@ -248,6 +253,23 @@ def load() -> Settings:
         problems.append("vault_key must be keystore or file")
         vault_key = "keystore"
     settings.vault_key = vault_key
+    # Not taken from runtime.json or plugin options: only the user's own config file and environment.
+    extra = os.environ.get("DATAFOG_RESTORE_PROGRAMS_EXTRA") or own_config.get("restore_programs_extra")
+    if extra is not None:
+        import re
+
+        from .plain import SHELL_WORDS
+        from .shellsub import NEVER
+        names = _as_list(extra)
+        bad = [name for name in names if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", name)
+               or name in SHELL_WORDS or name in NEVER]
+        if bad or not isinstance(extra, (str, list, tuple)) or (isinstance(extra, (list, tuple)) and any(
+                not isinstance(name, str) for name in extra)):
+            problems.append("restore_programs_extra must be a list of plain program names (no paths, no shell "
+                            "builtins, no shells or programs that only run other programs)")
+        else:
+            settings.restore_programs_extra = frozenset(names)
+    settings.recall_required = _truthy(merged.get("recall_required"), True)
     try:
         settings.max_scan_bytes = max(1024, int(merged.get("max_scan_bytes", settings.max_scan_bytes)))
     except (TypeError, ValueError):

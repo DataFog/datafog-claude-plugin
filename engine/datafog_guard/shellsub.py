@@ -16,64 +16,62 @@ Who chooses what:
   an e-mail address, a key, a credential URI. It can contain quotes, ``$( )``, backticks,
   ``;``, ``|``, ``&``, parentheses, backslashes, blanks, glob characters, a leading ``-``,
   newlines and non-ASCII text. Whoever planted the value (a web page, a ticket, a log
-  line) may have shaped it as an attack.
+  line) may have shaped it as an attack: ``a[$(cmd)]`` runs cmd wherever a shell expects a
+  variable name or a number.
 
-Goal: a value can never execute. Concretely, the text inserted for a marker is, in the
-parse the shell performs on the command, exactly one piece of literal data, and the
-program that receives it sees exactly the value's bytes.
+Goal: a value can never execute.
 
-How:
+HISTORY, AND WHY THIS FILE IS SMALL
+-----------------------------------
+The first version modelled a good part of bash and zsh (substitutions, heredocs, loops,
+assignments) and refused what it knew to be dangerous. Two reviews each found a way to run a
+value through something it did not know to be dangerous: ``RANDOM=[[M]]`` (assigning to a
+special variable evaluates arithmetic), ``x=[[M]]; printf -v "$x" y``, ``${!x}``, ``${y:x}``,
+``wait -p "$x"``, zsh ``export "$x"``. The pattern is that a value placed safely into a
+VARIABLE is then used by the rest of the command in a place that evaluates it.
 
-1. A conservative lexer walks the command and knows, at every marker, which quoting context
-   the shell is in. It models a deliberately small part of bash and zsh. Everything it
-   does not model raises :class:`Refused`; the command is then NOT run (fail closed). It
-   never guesses.
-2. Per context the value is written in the one encoding that context cannot interpret:
+So the rule is now the other way round. A command that contains a marker is restored only
+if the WHOLE command fits a small positive grammar (plain.py) in which a value cannot
+reach anything but the argument list of an external program:
 
-   ==================  =====================================================================
-   unquoted            ``'value'`` with every ``'`` written as ``'\\''``; text next to it
-                       joins the same word
-   single-quoted       the value in place, every ``'`` written as ``'\\''``
-   double-quoted       the double quote is closed, ``'value'`` is written as above, and the
-                       double quote is opened again. This is used instead of backslash
-                       escapes so that nothing inside the value is ever read by the
-                       double-quote rules (``$``, backtick, ``\\``, and ``!`` if history
-                       expansion were on).
-   ``$'...'``          the value in place, ``\\`` written as ``\\\\`` and ``'`` as ``\\'``
-   heredoc, quoted     the value in place; values with a newline are refused, and so is a
-   delimiter           line that would equal the delimiter
-   heredoc, unquoted   the value in place with ``\\``, ``$`` and backtick escaped; same two
-   delimiter           refusals
-   ``$( )``            the lexer recurses; contexts inside are the ones above
-   backticks           the lexer recurses, and the inserted text gets the extra backtick
-                       layer (``\\`` doubled, backtick escaped)
-   comment             the marker is left as it is (nothing runs there)
-   ==================  =====================================================================
+1. The command is PLAIN (see plain.py): simple commands joined by ``|``, ``&&``, ``||``, ``;``
+   or newlines, with redirections to and from literal paths. No ``$`` of any kind, so no
+   variable can carry a value anywhere; no backticks, backslashes, globs, braces, heredocs,
+   here-strings, subshells, groups, loops, conditionals, functions, assignments, background.
+2. Every command name, in EVERY simple command of the command, is a literal unquoted word on a
+   short allow-list of programs that were read option by option and treat their arguments as
+   data (RESTORE_PROGRAMS below, with the audit), plus what the user vouched for in the
+   restore_programs_extra setting. A deny-list of "programs that run their arguments" was tried
+   first and lost: ``perl5.36 -e``, ``git -c alias.x=!cmd``, ``tar --checkpoint-action=exec=``.
+   ``printf`` is accepted only with a literal format made of text, ``%s`` and ``%%``.
+3. A marker stands only in an argument: as a whole unquoted word, or inside a single- or
+   double-quoted part of an argument. Never in a command name or a redirection target, and
+   never as a piece of an unquoted word.
+4. A value that would START an argument with ``-`` is refused unless a literal ``--`` word
+   stands earlier in the same command: after ``--`` programs take what follows as operands,
+   so the value cannot be read as an option.
+5. A value with a NUL byte is refused.
 
-3. A marker is refused where putting data there would change what runs: as (part of) a
-   command name, a redirection target, a heredoc delimiter, directly after an unquoted
-   ``$`` or backslash, inside ``${ }``, arithmetic, ``[[ ]]``, ``case``, arrays, function
-   definitions, or in the arguments of a program that itself runs its arguments
-   (``env``, ``sudo``, ``timeout`` ...) or parses them as code (``awk``, ``sed``,
-   ``sqlite3`` ...).
-4. A value that was inserted safely can still be executed LATER by the command itself:
-   ``x=[[M]]; eval "$x"``, ``echo [[M]] | sh``, ``let y=x``. No lexer can follow data
-   through a script, so any command that contains such a second parse anywhere (``eval``,
-   a shell, ``xargs``, ``ssh``, an interpreter, arithmetic, most shell builtins) is
-   refused as a whole when it contains markers.
+Encoding, for the three places a marker can stand:
 
-What this cannot do (see the README): a value that starts with ``-`` is delivered exactly
-and the receiving program may read it as an option; the lists of wrapping and
-code-parsing programs are finite; shell start-up files that change the shell's grammar
-(aliases in ``~/.zshenv``, ``BASH_ENV``) are not modelled; and while a command runs, the
-programs it starts have the value in their argument list (visible in ``ps``).
+    unquoted word    'value'                      every ' written as '\\''
+    in '...'         the value in place           every ' written as '\\''
+    in "..."         close the quote, 'value', open it again
+
+Anything else raises :class:`Refused` and the command is NOT run (fail closed).
+
+What this cannot do (see the README): the lists of wrapping and code-reading programs are
+finite; an external program may itself treat an argument as code (a query, a pattern, a
+template); shell start-up files that redefine programs as aliases or functions
+(``~/.zshenv``, ``BASH_ENV``) are not modelled; and while a command runs, the programs it
+starts have the value in their argument list (visible in ``ps``).
 """
 from __future__ import annotations
 
 import os
 import re
 
-MAX_DEPTH = 40
+from . import plain
 
 
 class Refused(Exception):
@@ -94,10 +92,10 @@ class Span:
 
 
 class Result:
-    def __init__(self, text: str, restored: int, left_literal: int):
+    def __init__(self, text: str, restored: int, left_literal: int = 0):
         self.text = text                  # the command with values in place
         self.restored = restored          # markers replaced
-        self.left_literal = left_literal  # markers left as they are (inside comments)
+        self.left_literal = left_literal  # always 0 now; kept for callers
 
 
 def shell_kind(path: str) -> str:
@@ -105,91 +103,91 @@ def shell_kind(path: str) -> str:
     return name if name in ("bash", "zsh") else "sh"
 
 
-# -- what a command word means ---------------------------------------------------------------
-# Reserved words after which the next word is again a command. None of them takes options.
-TRANSPARENT = frozenset({"if", "then", "elif", "else", "while", "until", "do", "!", "{"})
-# Builtins whose arguments are plain data, whatever the data is. Audit of each (a value may start with
-# "-" and so be read as an option, and may be shaped like `a[$(cmd)]`, which bash evaluates wherever a
-# variable NAME is expected):
-#   : true false   ignore their arguments.
-#   echo           options are -n -e -E only: they change the output, nothing is evaluated.
-#   for            `for i in WORDS`: words are data. A marker as the loop variable is a syntax error.
-#   printf         has -v NAME, and NAME is evaluated. Accepted only in the form checked in end():
-#                  a literal format as first argument, markers after it.
-# Not here on purpose: cd, chdir, pushd (a value would choose the directory later commands run in),
-# test and [ (-v NAME, arithmetic operands), and everything that takes a variable name (read, unset,
-# wait -p, getopts, mapfile, export -f ...), which is refused in PASSIVE or UNSAFE_BUILTINS.
-ARG_SAFE = frozenset({":", "true", "false", "echo", "printf", "for"})
-# `export NAME=value`: accepted only in exactly that form.
-ASSIGN_BUILTINS = frozenset({"export", "readonly", "local"})
-# May appear in a command that restores markers elsewhere, but take no marker themselves.
-PASSIVE = frozenset({"exit", "return", "break", "continue", "shift", "wait", "set", "umask", "times", "jobs",
-                     "kill", "type", "which", "whence", "where", "pwd", "popd", "dirs", "fi", "done", "}",
-                     "cd", "chdir", "pushd",
-                     "bg", "fg", "disown", "test", "[", "in"})
-_ARITH_TEST = frozenset({"-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-v", "-R", "-o", "-a"})
-# Every other bash/zsh builtin and reserved word: it can evaluate a string or a variable as code or as
-# arithmetic, load code, or start a syntax this lexer does not model. Present anywhere -> nothing is restored.
-UNSAFE_BUILTINS = frozenset("""
-    . source eval exec command builtin trap let declare typeset integer float private alias unalias enable
-    bind bindkey complete compgen compopt compctl compadd comparguments compcall compdescribe compfiles
-    compgroups compquote compset comptags comptry compvalues mapfile readarray read coproc select function
-    case esac [[ ]] repeat foreach end nocorrect noglob emulate autoload zmodload zcompile zle sched functions
-    unfunction vared zstyle zformat zparseopts zregexparse fc r history print pushln getln setopt unsetopt
-    shopt disable hash unhash rehash limit unlimit ulimit ttyctl echotc echoti log logout bye suspend caller
-    help getopts unset time - always
+# ---------------------------------------------------------------------------------------------
+# THE ALLOW-LIST. A marker is restored only when EVERY simple command of the whole command runs a
+# program named here (or in the user's restore_programs_extra setting). Third review: "any external
+# program except the ones on a list" still ran values as code (perl5.36 -e, git -c alias.x=!cmd,
+# tar --checkpoint-action=exec=, rsync -e, man -P, fzf --preview ...). The set of programs that
+# can run an argument is open-ended; the set below was read option by option.
+#
+# Audit (GNU coreutils 9 / grep 3 / diffutils 3 / ripgrep 14 / util-linux, and the BSD/macOS
+# variants). "exec" = can the program be made to run another program or evaluate text, through an
+# option or an operand? Environment variables are not a value path: the grammar has no assignments.
+#
+#   program            exec-capable or value-shaped risk                         decision
+#   grep egrep fgrep   none (GNU and BSD). -f FILE reads patterns from a file.   args may hold markers
+#   rg                 --pre CMD, --pre-glob, --hostname-bin run a program.      refused: those options
+#                      -z runs fixed decompressors by name; not value-driven.
+#   cat head tail      none. tail -f/--pid only wait.                            args may hold markers
+#   wc nl tac rev      none (wc --files0-from reads a list of names).            args may hold markers
+#   fold cut tr paste  none.                                                     args may hold markers
+#   join comm cmp      none.                                                     args may hold markers
+#   column             none.                                                     args may hold markers
+#   diff               none in diff itself (sdiff and diff3 are not listed).     args may hold markers
+#   ls stat            none. stat -c/--printf/-f take a format: output only.     args may hold markers
+#   basename dirname   pure text.                                                args may hold markers
+#   file               -m/--magic-file loads a magic database, -C compiles one.  refused: -m -C (and long)
+#   sort               --compress-program runs a program; -o/--output and        refused: those options
+#                      -T/--temporary-directory write where an argument says.
+#   printf             builtin. -v NAME evaluates NAME; %d %i %o %u %x %X %c     only `printf [--] FORMAT
+#                      and * evaluate the argument as arithmetic in zsh; %b       args`, FORMAT literal with
+#                      and %q reinterpret it.                                    %s and %% only
+#   true  :            ignore their arguments.                                   args may hold markers
+#   uniq               the second operand is an OUTPUT file.                     listed, no marker in its args
+#   tee cp mv mkdir    write to or create what an argument names: a value        listed, no marker in their
+#   touch              would choose the path that is written.                    args (may stand in a pipeline)
+#
+# Left out on purpose: echo (zsh and dash interpret backslashes in its arguments, so a value is not
+# delivered byte for byte; use printf '%s\n'), jq (the filter is a program), find (-exec, -delete,
+# -fprintf ...), sed, awk, xargs, every shell and interpreter, env, sudo, git, tar, make, every pager,
+# and every network tool (curl, wget, ssh, scp, rsync, nc): a real value must not leave the machine
+# through a silent path. To use a value with any other program, write it to a file with the Write
+# tool (which restores locally) and let the program read the file.
+# ---------------------------------------------------------------------------------------------
+MARKER_ARGUMENTS = frozenset("""
+    grep egrep fgrep rg cat head tail wc nl tac rev fold cut tr paste join comm cmp column diff ls stat
+    basename dirname file sort printf true :
 """.split())
-# Programs that parse their input or arguments as shell or as a program.
-_SHELLS = frozenset("sh bash zsh dash ksh mksh ksh93 ash fish csh tcsh busybox pwsh powershell rbash".split())
-REPARSE_PROGRAMS = _SHELLS | frozenset("""
-    xargs parallel ssh su at batch crontab script watch tmux screen expect
-    perl ruby node nodejs deno bun php lua luajit Rscript R osascript tclsh wish irb pry ipython julia groovy
-    scala jshell erl elixir guile racket clisp sbcl ghci
-""".split())
-_PYTHON = re.compile(r"^(?:python|pypy)[0-9.]*$")
-# Any word equal to one of these, wherever it stands (`docker exec c sh -c ...`, `find -exec ...`).
-ANYWHERE = _SHELLS | frozenset({"eval", "xargs", "parallel", "-exec", "-execdir", "-ok", "-okdir"})
-# Programs that run their arguments as a command, or read an argument as a program in their own
-# language. A marker in the same simple command is refused. This list is a heuristic and is finite.
-WRAPPING_PROGRAMS = frozenset("""
-    env sudo doas nohup nice timeout stdbuf setsid ionice chrt taskset flock strace ltrace gdb lldb valgrind
-    unbuffer caffeinate chronic chroot nsenter unshare systemd-run runuser pkexec fakeroot proot firejail
-    bwrap docker podman nerdctl kubectl oc lxc vagrant ansible ansible-playbook mosh rsh direnv devbox mise
-    npx pnpm yarn npm bunx uv uvx pipx poetry pdm hatch tox nox make gmake just task cargo go gradle mvn
-    bazel awk gawk mawk nawk sed gsed ed ex vi vim nvim emacs sqlite3 psql mysql mariadb mongosh mongo
-    redis-cli sqlcmd duckdb clickhouse-client bc dc m4 gnuplot octave
-""".split())
-# Variables whose value decides what code runs.
-_RISKY_NAMES = frozenset("""
-    PATH IFS ENV BASH_ENV SHELL SHELLOPTS BASHOPTS PS0 PS1 PS2 PS3 PS4 PROMPT PROMPT_COMMAND ZDOTDIR FPATH
-    CDPATH HOME EDITOR VISUAL PAGER MANPAGER BROWSER TERMCAP TERMINFO NODE_OPTIONS GLOBIGNORE HISTFILE
-    BASH_XTRACEFD TMPDIR LESSOPEN LESSCLOSE fpath path cdpath module_path MODULE_PATH
-""".split())
-_RISKY_PREFIXES = ("LD_", "DYLD_", "PYTHON", "PERL", "RUBY", "GIT_", "NODE_", "npm_", "NPM_", "BASH_", "ZSH_",
-                   "DATAFOG_", "CLAUDE_", "JAVA_", "_JAVA", "LUA_", "GEM_", "BUNDLE_")
+NO_MARKER_ARGUMENTS = frozenset({"uniq", "tee", "cp", "mv", "mkdir", "touch"})
+RESTORE_PROGRAMS = MARKER_ARGUMENTS | NO_MARKER_ARGUMENTS
+# Options that are refused, anywhere in a command that holds a marker: (long names, short letters).
+# A long option is refused by any unambiguous-looking abbreviation too (GNU accepts prefixes).
+FORBIDDEN_OPTIONS = {
+    "rg": (("pre", "pre-glob", "hostname-bin"), ""),
+    "sort": (("compress-program", "output", "temporary-directory", "files0-from", "random-source"), "oT"),
+    "file": (("magic-file", "compile", "files-from"), "mCf"),
+}
+# An absolute path is accepted only into these directories; a relative path (./grep, bin/grep) never.
+SYSTEM_DIRECTORIES = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"})
+BUILTIN_NAMES = frozenset({"printf", "true", ":"})          # shell builtins on the list: bare name only
+_PRINTF_FORMAT = re.compile(r"(?:[^%\\]|%%|%s|\\[nt\\]|\\0(?![0-7]))*")
 
-_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\+?=")
-_SUBSCRIPT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\[")
-_FD_VAR = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}[<>]")
-_SAFE_PARAM = re.compile(r"[A-Za-z0-9_#@*?!:+=%/^,.\- ]*")
-_WORD_END = " \t\n;&|<>)"
-_REDIRECTS = ("<<<", "<<-", "<<", "<>", "<&", ">>", ">&", ">|", "&>>", "&>", "<", ">")
+# Defence in depth only (the allow-list decides): these may not be vouched for in
+# restore_programs_extra either, because no argument discipline makes them inert.
+_SHELLS = frozenset("sh bash zsh dash ksh mksh ksh93 ash fish csh tcsh busybox pwsh powershell rbash".split())
+NEVER = _SHELLS | frozenset({"eval", "exec", "xargs", "parallel", "env", "sudo", "doas", "su", "ssh", "command",
+                             "builtin", "source", ".", "time", "nohup", "nice", "timeout"})
+ANYWHERE = _SHELLS | frozenset({"eval", "exec", "xargs", "parallel", "-exec", "-execdir", "-ok", "-okdir"})
 
 _WHY = {
-    "command_word": "a marker is used as, or inside, a command name",
-    "redirect": "a marker is used as a redirection target or heredoc delimiter",
-    "escape": "a marker follows a backslash or an unquoted $, or is split by shell syntax",
-    "expansion": "a marker is inside ${...}, arithmetic, or an old-style substitution",
-    "syntax": "the command uses shell syntax the restorer does not model with certainty",
-    "second_parse": "the command contains a program or builtin that evaluates text as code (for example "
-                    "eval, a shell, xargs, ssh, an interpreter, arithmetic)",
-    "wrapper": "a marker is an argument of a program that runs its arguments as a command or parses them "
-               "as a program (for example env, sudo, timeout, awk, sed)",
-    "assignment": "a marker is assigned to a variable that controls what code runs, or is used in an "
-                  "assignment form the restorer does not model",
-    "heredoc": "a marker in a heredoc could end the heredoc or cannot be written there safely",
-    "value": "a value contains a NUL byte or a newline that cannot be represented in this place",
-    "unbalanced": "the command has unbalanced quotes or brackets",
+    "grammar": "a command that contains markers must be made of plain commands only: programs with literal, "
+               "optionally quoted arguments, joined by | && || ; or newlines, with redirections to literal "
+               "paths; no $ of any kind, no backticks, backslashes, globs, braces, heredocs, subshells, loops, "
+               "conditionals, assignments or background jobs",
+    "command": "every program in a command that contains markers must be on the plugin's short list of programs "
+               "that treat their arguments as data (grep, rg, cat, head, tail, wc, sort, cut, tr, diff, ls, stat, "
+               "printf and a few more; see the README), called by bare name. To use a value with any other "
+               "program, write it to a file with the Write tool and let the program read the file",
+    "options": "an option that makes the program run another program or write where an argument says is used "
+               "in a command that contains markers",
+    "bystander": "a marker is an argument of a program that writes to or creates what its arguments name "
+                 "(uniq, tee, cp, mv, mkdir, touch)",
+    "placement": "a marker may stand only as a whole unquoted argument or inside a quoted argument; not in a "
+                 "command name, a redirection target or as part of an unquoted word",
+    "printf": "printf takes markers only as printf 'FORMAT' ARGUMENTS with a literal format that uses %s and %% "
+              "only (other conversions evaluate their argument in zsh)",
+    "option": "a value starts with '-' and could be read as an option; put a literal -- before it in the command",
+    "value": "a value contains a NUL byte",
 }
 
 
@@ -197,545 +195,100 @@ def _refuse(code: str) -> Refused:
     return Refused(code, _WHY[code])
 
 
-def _risky_name(name: str) -> bool:
-    return name in _RISKY_NAMES or name.startswith(_RISKY_PREFIXES)
-
-
 def _single(value: str) -> str:
     return value.replace("'", "'\\''")
 
 
-class _Frame:
-    """One simple command (and, for nesting, every command it encloses)."""
-    __slots__ = ("expect_command", "program", "dynamic", "markers", "args", "next_kind", "compound")
-
-    def __init__(self):
-        self.expect_command = True
-        self.program: str | None = None
-        self.dynamic = False
-        self.markers = 0
-        self.args: list[tuple[str, int, int, bool]] = []     # (literal text, markers in it, start, dynamic)
-        self.next_kind: str | None = None
-        self.compound = False
+def program_of(name: str, extra: frozenset = frozenset()) -> str | None:
+    """The listed program a command name stands for, or None. Exact names only: `grep`, or
+    `/usr/bin/grep` in a system directory. No version suffixes, no relative paths."""
+    directory, base = os.path.split(name)
+    if directory:
+        if directory not in SYSTEM_DIRECTORIES or base in BUILTIN_NAMES:
+            return None
+    return base if base in RESTORE_PROGRAMS or base in extra else None
 
 
-class _Word:
-    __slots__ = ("kind", "start", "name", "markers", "dynamic", "glob", "literal")
-
-    def __init__(self, kind: str, start: int):
-        self.kind, self.start = kind, start
-        self.name: str | None = None
-        self.markers = 0
-        self.dynamic = False          # holds an expansion: its text is not known before it runs
-        self.glob = False             # holds an unquoted * ? or [
-        self.literal: list[str] = []
-
-
-class _Lexer:
-    def __init__(self, text: str, spans: list[Span], shell: str):
-        self.s, self.n, self.i = text, len(text), 0
-        self.shell = shell
-        self.out: list[str] = []
-        self.at: dict[int, Span] = {}
-        self.covered = bytearray(self.n + 1)
-        last = 0
-        for span in sorted(spans, key=lambda item: item.start):
-            if not (last <= span.start < span.end <= self.n):
-                raise _refuse("syntax")
-            if "\x00" in span.value:
-                raise _refuse("value")
-            self.at[span.start] = span
-            for position in range(span.start, span.end):
-                self.covered[position] = 1
-            last = span.end
-        self.frames: list[_Frame] = []
-        self.pending: list[tuple[str, bool, bool]] = []     # heredocs: (delimiter, quoted, strip tabs)
-        self.backtick = False
-        self.depth = 0
-        self.newline_ok = False
-        self.restored = 0
-        self.left_literal = 0
-        self.global_refusal: str | None = None
-
-    # -- low level -------------------------------------------------------------------------
-    def take(self, count: int = 1) -> None:
-        """Copy ``count`` characters unchanged. No marker may be consumed this way."""
-        end = self.i + count
-        if end > self.n:
-            raise _refuse("unbalanced")
-        s = self.s
-        for position in range(self.i, end):
-            if self.covered[position]:
-                raise _refuse("escape")
-            char = s[position]
-            if char == "\n" and self.pending and not self.newline_ok:
-                raise _refuse("heredoc")
-            if char == "\\" and self.backtick and position + 1 < self.n and s[position + 1] in "\\$`":
-                raise _refuse("syntax")       # the backtick layer would rewrite this before the inner parse
-        self.out.append(s[self.i:end])
-        self.i = end
-
-    def peek(self, offset: int = 0) -> str:
-        position = self.i + offset
-        return self.s[position] if position < self.n else ""
-
-    @property
-    def frame(self) -> _Frame:
-        return self.frames[-1]
-
-    def blanks(self) -> None:
-        while self.i < self.n:
-            char = self.s[self.i]
-            if char in " \t":
-                self.take()
-            elif char == "\\" and self.peek(1) == "\n":
-                self.take(2)
-            else:
-                return
-
-    # -- markers ---------------------------------------------------------------------------
-    def marker(self, mode: str, word: _Word | None) -> None:
-        span = self.at[self.i]
-        value = span.value
-        if word is not None:
-            if word.kind == "command":
-                raise _refuse("command_word")
-            if word.kind == "redirect":
-                raise _refuse("redirect")
-            if word.kind == "assign" and (word.name is None or _risky_name(word.name)):
-                raise _refuse("assignment")
-            if self.s[word.start] == "=":
-                raise _refuse("syntax")           # zsh: =name is replaced by the path of a command
-        previous = self.s[self.i - 1] if self.i else ""
-        if mode in ("bare", "double", "heredoc") and previous == "$":
-            raise _refuse("escape")
-        if mode == "bare":
-            text = "'" + _single(value) + "'"
-        elif mode == "single":
-            text = _single(value)
-        elif mode == "double":
-            text = "\"'" + _single(value) + "'\""
-        elif mode == "ansi":
-            text = value.replace("\\", "\\\\").replace("'", "\\'")
-        elif mode == "heredoc_quoted":
-            if "\n" in value:
-                raise _refuse("value")
-            text = value
-        else:   # heredoc with an unquoted delimiter
-            if "\n" in value:
-                raise _refuse("value")
-            text = value.replace("\\", "\\\\").replace("$", "\\$").replace("`", "\\`")
-        if self.backtick:
-            text = text.replace("\\", "\\\\").replace("`", "\\`")
-        self.out.append(text)
-        self.i = span.end
-        self.restored += 1
-        if word is not None:
-            word.markers += 1
-        for frame in self.frames:
-            frame.markers += 1
-
-    # -- commands --------------------------------------------------------------------------
-    def begin(self) -> None:
-        self.frames.append(_Frame())
-
-    def end(self) -> None:
-        frame = self.frames.pop()
-        if frame.next_kind is not None:
-            raise _refuse("syntax")               # an operator without its word
-        program = os.path.basename(frame.program) if frame.program else None
-        if program in ("test", "[") and any(arg[0] in _ARITH_TEST for arg in frame.args):
-            self.global_refusal = self.global_refusal or "second_parse"
-        if not frame.markers:
-            return
-        if frame.dynamic:
-            raise _refuse("command_word")
-        if program is None or frame.compound:
-            return
-        if program in WRAPPING_PROGRAMS or program in PASSIVE:
-            raise _refuse("wrapper")
-        if program in ASSIGN_BUILTINS:
-            for text, markers, start, _ in frame.args:
-                if text.startswith("-"):
-                    raise _refuse("assignment")
-                if markers:
-                    match = _ASSIGN.match(self.s, start)
-                    if not match or _risky_name(match.group(1)):
-                        raise _refuse("assignment")
-        if program == "printf":
-            # `printf -v NAME` assigns, and bash evaluates NAME (`a[$(cmd)]` runs cmd). A value that is
-            # "-v" must never stand where an option can: only `printf LITERAL-FORMAT args...` is accepted,
-            # optionally after a literal `--`. Options end at the format, so later values are data.
-            args = frame.args[1:] if frame.args and frame.args[0][0] == "--" and not frame.args[0][1] else frame.args
-            if not args or args[0][1] or args[0][3] or args[0][0].startswith("-"):
-                raise _refuse("assignment")
-
-    def commands(self, closer: str) -> None:
-        self.depth += 1
-        if self.depth > MAX_DEPTH:
-            raise _refuse("syntax")
-        self.begin()
-        while True:
-            self.blanks()
-            if self.i >= self.n:
-                if closer or self.pending:
-                    raise _refuse("unbalanced")
-                break
-            char = self.s[self.i]
-            if char == closer:
-                if self.pending:
-                    raise _refuse("heredoc")
-                self.end()
-                self.take()
-                self.depth -= 1
-                return
-            if char == ")" or char == "`":
-                raise _refuse("unbalanced")
-            if char == "\n":
-                self.end()
-                self.newline()
-                self.begin()
-            elif char == "#":
-                self.comment()
-            elif char in ";&|":
-                if self.s.startswith("&>", self.i):
-                    self.redirect()
-                    continue
-                if self.s[self.i:self.i + 2] in (";;", ";&", ";|"):
-                    raise _refuse("syntax")
-                self.take(2 if self.s[self.i:self.i + 2] in ("&&", "||", "|&") else 1)
-                self.end()
-                self.begin()
-            elif char == "(":
-                frame = self.frame
-                if self.peek(1) == "(" or not frame.expect_command or frame.program is not None:
-                    raise _refuse("syntax")
-                self.take()
-                self.nested(")")
-                frame.program, frame.expect_command, frame.compound = "(", False, True
-            elif char in "<>":
-                if self.peek(1) == "(":
-                    self.word()
-                else:
-                    self.redirect()
-            elif char.isdigit() and self._fd_prefix():
-                self.redirect()
-            else:
-                self.word()
-        self.end()
-        self.depth -= 1
-
-    def _fd_prefix(self) -> bool:
-        position = self.i
-        while position < self.n and self.s[position].isdigit():
-            position += 1
-        if position < self.n and self.s[position] in "<>" and not self.covered[position]:
-            self.take(position - self.i)
-            return True
-        return False
-
-    def nested(self, closer: str) -> None:
-        if self.pending:
-            raise _refuse("heredoc")
-        self.commands(closer)
-
-    def newline(self) -> None:
-        self.newline_ok = True
-        try:
-            self.take()
-            pending, self.pending = self.pending, []
-            for delimiter, quoted, strip in pending:
-                self.heredoc_body(delimiter, quoted, strip)
-        finally:
-            self.newline_ok = False
-
-    def comment(self) -> None:
-        while self.i < self.n and self.s[self.i] != "\n":
-            if self.i in self.at:
-                span = self.at[self.i]
-                self.out.append(self.s[span.start:span.end])
-                self.i = span.end
-                self.left_literal += 1
-            elif self.s[self.i] in "'\"\\$`":
-                raise _refuse("syntax")       # if the shell did not read this as a comment, quoting would shift
-            else:
-                self.take()
-
-    # -- redirections and heredocs -----------------------------------------------------------
-    def redirect(self) -> None:
-        operator = next(op for op in _REDIRECTS if self.s.startswith(op, self.i))
-        self.take(len(operator))
-        if operator in ("<<", "<<-"):
-            self.heredoc_start(operator == "<<-")
-            return
-        if operator == "<<<" and self.shell == "sh":
-            raise _refuse("syntax")
-        self.blanks()
-        if self.i >= self.n or self.s[self.i] in "\n;&|<>()#":
-            raise _refuse("syntax")
-        self.frame.next_kind = "herestring" if operator == "<<<" else "redirect"
-        self.word()
-
-    def heredoc_start(self, strip: bool) -> None:
-        if self.backtick:
-            raise _refuse("syntax")
-        self.blanks()
-        delimiter: list[str] = []
-        quoted = False
-        began = self.i
-        while self.i < self.n and self.s[self.i] not in _WORD_END + "(":
-            char = self.s[self.i]
-            if char == "'" or char == '"':
-                quoted = True
-                self.take()
-                while self.peek() != char:
-                    if self.i >= self.n:
-                        raise _refuse("unbalanced")
-                    if self.s[self.i] in "$`\\\n":
-                        raise _refuse("syntax")
-                    delimiter.append(self.s[self.i])
-                    self.take()
-                self.take()
-            elif char == "\\":
-                quoted = True
-                if self.peek(1) in ("", "\n"):
-                    raise _refuse("syntax")
-                delimiter.append(self.peek(1))
-                self.take(2)
-            elif char in "$`":
-                raise _refuse("syntax")
-            else:
-                delimiter.append(char)
-                self.take()
-        if self.i == began or not delimiter:
-            raise _refuse("syntax")
-        self.pending.append(("".join(delimiter), quoted, strip))
-
-    def heredoc_body(self, delimiter: str, quoted: bool, strip: bool) -> None:
-        s = self.s
-        while True:
-            if self.i >= self.n:
-                raise _refuse("unbalanced")           # no line holds the delimiter
-            stop = s.find("\n", self.i)
-            last = stop < 0
-            stop = self.n if last else stop
-            line = s[self.i:stop]
-            if (line.lstrip("\t") if strip else line) == delimiter:
-                self.take(stop - self.i)
-                if not last:
-                    self.take()
-                return
-            if not quoted and (len(line) - len(line.rstrip("\\"))) % 2:
-                raise _refuse("heredoc")              # a continuation line: where the body ends is not certain
-            if not any(self.covered[position] for position in range(self.i, stop)):
-                self.take(stop - self.i)
-            else:
-                mark, begin = len(self.out), self.i
-                while self.i < stop:
-                    char = s[self.i]
-                    if self.i in self.at:
-                        if strip and self.at[self.i].value.startswith("\t") and not line[:self.i - begin].strip("\t"):
-                            raise _refuse("heredoc")      # <<- would strip the value's own leading tabs
-                        self.marker("heredoc_quoted" if quoted else "heredoc", None)
-                    elif quoted:
-                        self.take()
-                    elif char == "\\":
-                        if self.i + 1 >= stop:
-                            raise _refuse("heredoc")
-                        self.take(2)
-                    elif char == "`" or (char == "$" and self.peek(1) in "({['\""):
-                        raise _refuse("expansion")
-                    else:
-                        self.take()
-                written = "".join(self.out[mark:])
-                if written.strip(" \t") == delimiter or "\n" in written:
-                    raise _refuse("heredoc")
-            if last:
-                raise _refuse("unbalanced")
-            self.take()
-
-    # -- words -----------------------------------------------------------------------------
-    def word(self) -> None:
-        frame = self.frame
-        kind = frame.next_kind or ("command" if frame.expect_command else "arg")
-        frame.next_kind = None
-        word = _Word(kind, self.i)
-        s = self.s
-        if kind == "command":
-            match = _ASSIGN.match(s, self.i)
-            if match and not any(self.covered[position] for position in range(match.start(), match.end())):
-                word.kind, word.name = "assign", match.group(1)
-                self.take(match.end() - self.i)
-                if self.peek() == "(":
-                    raise _refuse("assignment")
-            elif _SUBSCRIPT.match(s, self.i):
-                raise _refuse("assignment")
-            elif _FD_VAR.match(s, self.i):
-                raise _refuse("syntax")
-        first = True
-        while self.i < self.n:
-            char = s[self.i]
-            if first and char in "<>" and self.peek(1) == "(":
-                if self.shell == "sh":
-                    raise _refuse("syntax")
-                self.take(2)
-                self.nested(")")
-                word.dynamic = True
-                first = False
-                continue
-            first = False
-            if char in _WORD_END or (char == "`" and self.backtick):
-                break
-            if self.i in self.at:
-                self.marker("bare", word)
-            elif char == "(":
-                raise _refuse("syntax")               # function definition, array, glob qualifier, extglob
-            elif char == "\\":
-                if self.i + 1 >= self.n:
-                    raise _refuse("unbalanced")
-                if s[self.i + 1] != "\n":
-                    word.literal.append(s[self.i + 1])
-                self.take(2)
-            elif char == "'":
-                self.single(word)
-            elif char == '"':
-                self.double(word)
-            elif char == "$":
-                self.dollar(word)
-            elif char == "`":
-                self.backticks()
-                word.dynamic = True
-            else:
-                if char in "*?[":
-                    word.glob = True
-                word.literal.append(char)
-                self.take()
-        self.end_word(word)
-
-    def end_word(self, word: _Word) -> None:
-        frame = self.frame
-        literal = "".join(word.literal)
-        if not word.dynamic and os.path.basename(literal) in ANYWHERE:
-            self.global_refusal = self.global_refusal or "second_parse"
-        if word.kind == "command":
-            if word.dynamic or (word.glob and literal != "["):
-                frame.dynamic, frame.expect_command = True, False
-                self.global_refusal = self.global_refusal or "second_parse"   # `$cmd` may be eval or a shell
-                return
-            if literal in TRANSPARENT:
-                return
-            frame.program, frame.expect_command = literal, False
-            base = os.path.basename(literal)
-            if base in UNSAFE_BUILTINS or base in REPARSE_PROGRAMS or _PYTHON.match(base):
-                self.global_refusal = self.global_refusal or "second_parse"
-        elif word.kind in ("arg", "herestring"):
-            frame.args.append((literal, word.markers, word.start, word.dynamic))
-
-    def single(self, word: _Word) -> None:
-        self.take()
-        while True:
-            if self.i >= self.n:
-                raise _refuse("unbalanced")
-            if self.i in self.at:
-                self.marker("single", word)
-            elif self.s[self.i] == "'":
-                self.take()
-                return
-            else:
-                word.literal.append(self.s[self.i])
-                self.take()
-
-    def double(self, word: _Word) -> None:
-        self.take()
-        while True:
-            if self.i >= self.n:
-                raise _refuse("unbalanced")
-            char = self.s[self.i]
-            if self.i in self.at:
-                self.marker("double", word)
-            elif char == '"':
-                self.take()
-                return
-            elif char == "\\":
-                if self.i + 1 >= self.n:
-                    raise _refuse("unbalanced")
-                word.literal.append(self.s[self.i + 1])
-                self.take(2)
-            elif char == "`":
-                raise _refuse("syntax")
-            elif char == "$":
-                self.dollar(word, quoted=True)
-            else:
-                word.literal.append(char)
-                self.take()
-
-    def dollar(self, word: _Word, quoted: bool = False) -> None:
-        following = self.peek(1)
-        if following == "'" and not quoted:
-            if self.shell == "sh":
-                raise _refuse("syntax")
-            self.take(2)
-            while True:
-                if self.i >= self.n:
-                    raise _refuse("unbalanced")
-                char = self.s[self.i]
-                if self.i in self.at:
-                    self.marker("ansi", word)
-                elif char == "\\":
-                    self.take(2)
-                    word.dynamic = True
-                elif char == "'":
-                    self.take()
-                    return
-                else:
-                    word.literal.append(char)
-                    self.take()
-        if following == '"' and not quoted:
-            raise _refuse("syntax")                   # $"..." (translated string)
-        word.dynamic = True
-        if following == "(":
-            if self.peek(2) == "(":
-                raise _refuse("expansion")            # arithmetic, or too close to it to tell
-            self.take(2)
-            self.nested(")")
-        elif following == "{":
-            close = self.s.find("}", self.i + 2)
-            if close < 0 or not _SAFE_PARAM.fullmatch(self.s, self.i + 2, close):
-                raise _refuse("expansion")
-            if any(self.covered[position] for position in range(self.i, close + 1)):
-                raise _refuse("expansion")
-            self.take(close + 1 - self.i)
-        elif following == "[":
-            raise _refuse("expansion")
-        else:
-            self.take()
-
-    def backticks(self) -> None:
-        if self.backtick or self.pending:
-            raise _refuse("syntax")
-        self.take()
-        self.backtick = True
-        self.commands("`")
-        self.backtick = False
+def _check_names(parsed: plain.Plain, extra: frozenset = frozenset()) -> None:
+    """Every simple command of the whole command, with or without a marker of its own."""
+    for simple in parsed.commands:
+        first = simple.words[0]
+        if not first.bare or first.markers or first.tilde:
+            raise _refuse("command")
+        program = program_of(first.text, extra)
+        if program is None:
+            raise _refuse("command")
+        for word in simple.words:
+            if os.path.basename(word.text) in ANYWHERE or word.text in ANYWHERE:
+                raise _refuse("command")
+        if any(target.markers for _, target in simple.targets):
+            raise _refuse("placement")
+        if program in NO_MARKER_ARGUMENTS and any(word.markers for word in simple.words):
+            raise _refuse("bystander")
+        long_names, letters = FORBIDDEN_OPTIONS.get(program, ((), ""))
+        for word in simple.words[1:]:
+            text = word.text
+            if text.startswith("--") and len(text) > 2:
+                given = text[2:].split("=", 1)[0]
+                if any(name.startswith(given) or given.startswith(name) for name in long_names):
+                    raise _refuse("options")
+            elif text.startswith("-") and len(text) > 1 and any(letter in text for letter in letters):
+                raise _refuse("options")
 
 
-def substitute(command: str, spans: list[Span], shell: str = "bash") -> Result:
+def substitute(command: str, spans: list[Span], shell: str = "bash", extra=frozenset()) -> Result:
     """The command with every known marker replaced by its value as inert data.
 
-    Raises :class:`Refused` when that cannot be done with certainty. ``shell`` is "bash", "zsh"
-    or "sh" (anything else that runs the command; fewer forms are accepted then).
+    Raises :class:`Refused` unless the whole command fits the grammar in the module docstring.
+    ``shell`` is accepted for callers; the grammar is the same for bash, zsh and sh.
+    ``extra`` are the program names the user vouched for (restore_programs_extra).
     """
-    if "\x00" in command:
-        raise _refuse("syntax")
-    lexer = _Lexer(command, spans, shell)
-    try:
-        lexer.commands("")
-    except RecursionError:
-        raise _refuse("syntax") from None
-    if lexer.frames or lexer.i != lexer.n:
-        raise _refuse("unbalanced")
-    if lexer.restored and lexer.global_refusal:
-        raise _refuse(lexer.global_refusal)
-    if lexer.restored + lexer.left_literal != len(spans):
-        raise _refuse("syntax")
-    return Result("".join(lexer.out), lexer.restored, lexer.left_literal)
+    spans = sorted(spans, key=lambda span: span.start)
+    if not spans:
+        return Result(command, 0)
+    if any("\x00" in span.value for span in spans):
+        raise _refuse("value")
+    parsed = plain.parse(command, [(span.start, span.end) for span in spans])
+    if parsed is None:
+        raise _refuse("grammar")
+    _check_names(parsed, frozenset(extra))
+    by_start = {span.start: span for span in spans}
+    edits: list[tuple[int, int, str]] = []
+    for simple in parsed.commands:
+        words = simple.words
+        if os.path.basename(words[0].text) == "printf":
+            # `printf -v NAME` assigns, and bash evaluates NAME. zsh evaluates the argument of every numeric
+            # conversion (%d %i %o %u %x %X %c, and * for a width) as arithmetic, where `a[$(cmd)]` runs cmd;
+            # %b and %q reinterpret the argument. So: `printf [--] FORMAT args...`, FORMAT a literal made of
+            # ordinary text, \n, \t, \\, %% and %s. Options end at the format.
+            index = 2 if len(words) > 2 and words[1].text == "--" and words[1].bare else 1
+            if len(words) <= index or words[index].markers or words[index].text.startswith("-"):
+                raise _refuse("printf")
+            if any(word.markers for word in words[1:index]) or not _PRINTF_FORMAT.fullmatch(words[index].text):
+                raise _refuse("printf")
+        dashes = False                         # a literal `--` word was seen in this command
+        for word in words[1:]:
+            for start, end, kind, offset in word.markers:
+                span = by_start[start]
+                if kind == "bare" and (len(word.parts) != 1 or word.start != start or word.end != end):
+                    raise _refuse("placement")       # a marker glued to other unquoted text
+                if span.value.startswith("-") and offset == 0 and not dashes:
+                    raise _refuse("option")
+                if kind == "bare":
+                    text = "'" + _single(span.value) + "'"
+                elif kind == "single":
+                    text = _single(span.value)
+                else:
+                    text = "\"'" + _single(span.value) + "'\""
+                edits.append((start, end, text))
+            if word.text == "--" and word.bare and not word.markers:
+                dashes = True
+    if len(edits) != len(spans):
+        raise _refuse("placement")
+    out, position = [], 0
+    for start, end, text in sorted(edits):
+        out.append(command[position:start])
+        out.append(text)
+        position = end
+    out.append(command[position:])
+    return Result("".join(out), len(edits))
