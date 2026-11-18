@@ -1,0 +1,352 @@
+{
+  "provenance": {
+    "revision": "fe1bd1c848880fc4c3c6015c136d5fd9ff28c1e0",
+    "claude": "2.1.327",
+    "kind": "real host supplemental modes"
+  },
+  "cases": [
+    {
+      "case": "default-allow",
+      "version": "2.1.327",
+      "exit": 0,
+      "tool_names": [
+        {
+          "name": "Bash",
+          "subagent": false
+        }
+      ],
+      "observed_inputs": [
+        {
+          "tool_name": "Bash",
+          "tool_use_id": "toolu_01Rb2x9ij1BiceeqD3Exwu5d",
+          "permission_mode": "default",
+          "agent_id": null,
+          "agent_type": null
+        }
+      ],
+      "guard_permissions": [
+        {
+          "action": "bash_wrapped",
+          "decision": "allow",
+          "event": "PreToolUse",
+          "ms": 38.5,
+          "permission": {
+            "mode": "default",
+            "step": 7
+          },
+          "tool": "Bash",
+          "ts": "2026-11-18T18:24:07Z"
+        }
+      ],
+      "permission_metadata": [
+        {
+          "id": "toolu_01Rb2x9ij1BiceeqD3Exwu5d",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "hook",
+            "reason_type": "hook"
+          }
+        }
+      ],
+      "denial_count": 0,
+      "result_errors": [
+        false
+      ],
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-mode-supplement.5aeyiyck/log/runs/01-default-allow.jsonl",
+      "requested_commands": [
+        "pwd"
+      ]
+    },
+    {
+      "case": "dontAsk-allow",
+      "version": "2.1.327",
+      "exit": 0,
+      "tool_names": [
+        {
+          "name": "Bash",
+          "subagent": false
+        }
+      ],
+      "observed_inputs": [
+        {
+          "tool_name": "Bash",
+          "tool_use_id": "toolu_01S5D5u3uSdG52MghgU8Rhk7",
+          "permission_mode": "dontAsk",
+          "agent_id": null,
+          "agent_type": null
+        }
+      ],
+      "guard_permissions": [
+        {
+          "action": "bash_wrapped",
+          "decision": "allow",
+          "event": "PreToolUse",
+          "ms": 37.7,
+          "permission": {
+            "mode": "dontAsk",
+            "step": 7
+          },
+          "tool": "Bash",
+          "ts": "2026-11-18T18:24:14Z"
+        }
+      ],
+      "permission_metadata": [
+        {
+          "id": "toolu_01S5D5u3uSdG52MghgU8Rhk7",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "hook",
+            "reason_type": "hook"
+          }
+        }
+      ],
+      "denial_count": 0,
+      "result_errors": [
+        false
+      ],
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-mode-supplement.5aeyiyck/log/runs/02-dontAsk-allow.jsonl",
+      "requested_commands": [
+        "pwd"
+      ]
+    },
+    {
+      "case": "auto-defer",
+      "version": "2.1.327",
+      "exit": 0,
+      "tool_names": [
+        {
+          "name": "Bash",
+          "subagent": false
+        }
+      ],
+      "observed_inputs": [
+        {
+          "tool_name": "Bash",
+          "tool_use_id": "toolu_01YQUE5irLzfBdoso7nxWKfW",
+          "permission_mode": "auto",
+          "agent_id": null,
+          "agent_type": null
+        }
+      ],
+      "guard_permissions": [
+        {
+          "action": "bash_wrapped",
+          "decision": null,
+          "event": "PreToolUse",
+          "ms": 67.4,
+          "permission": {
+            "mode": "auto",
+            "step": 8
+          },
+          "tool": "Bash",
+          "ts": "2026-11-18T18:24:25Z"
+        }
+      ],
+      "permission_metadata": [
+        {
+          "id": "toolu_01YQUE5irLzfBdoso7nxWKfW",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "config",
+            "reason_type": "classifier"
+          }
+        }
+      ],
+      "denial_count": 0,
+      "result_errors": [
+        false
+      ],
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-mode-supplement.5aeyiyck/log/runs/03-auto-defer.jsonl",
+      "requested_commands": [
+        "date -u +%Y"
+      ],
+      "host_recorded_updated_command": ". <PLUGIN_ROOT>/scripts/wrap.sh && __datafog_run <PLUGIN_ROOT>/scripts/datafog-guard <TEMP>/data <TEMP>/vault 'date -u +%Y'"
+    },
+    {
+      "case": "plan-child",
+      "version": "2.1.327",
+      "exit": 0,
+      "tool_names": [
+        {
+          "name": "Agent",
+          "subagent": false
+        },
+        {
+          "name": "Read",
+          "subagent": true
+        }
+      ],
+      "observed_inputs": [
+        {
+          "tool_name": "Agent",
+          "tool_use_id": "toolu_01LFVpjLEJTS2iNji6t12JYw",
+          "permission_mode": "plan",
+          "agent_id": null,
+          "agent_type": null
+        },
+        {
+          "tool_name": "Read",
+          "tool_use_id": "toolu_01B7hfqRnUgo9tFsYfW9XLxF",
+          "permission_mode": "plan",
+          "agent_id": "a6670307e7f014c7d",
+          "agent_type": "general-purpose"
+        }
+      ],
+      "guard_permissions": [],
+      "permission_metadata": [
+        {
+          "id": "toolu_01B7hfqRnUgo9tFsYfW9XLxF",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "config",
+            "reason_type": "rule"
+          }
+        },
+        {
+          "id": "toolu_01LFVpjLEJTS2iNji6t12JYw",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "config",
+            "reason_type": "classifier"
+          }
+        }
+      ],
+      "denial_count": 0,
+      "result_errors": [
+        false,
+        false
+      ],
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-mode-supplement.5aeyiyck/log/runs/04-plan-child.jsonl",
+      "requested_commands": []
+    },
+    {
+      "case": "dontAsk-child",
+      "version": "2.1.327",
+      "exit": 0,
+      "tool_names": [
+        {
+          "name": "Agent",
+          "subagent": false
+        },
+        {
+          "name": "Read",
+          "subagent": true
+        }
+      ],
+      "observed_inputs": [
+        {
+          "tool_name": "Agent",
+          "tool_use_id": "toolu_01JBULGdT1ct8ZMHeCrUr63W",
+          "permission_mode": "dontAsk",
+          "agent_id": null,
+          "agent_type": null
+        },
+        {
+          "tool_name": "Read",
+          "tool_use_id": "toolu_01EFJ9xmQXBjejdUnZEsfJ5L",
+          "permission_mode": "dontAsk",
+          "agent_id": "a3687a43a65005eca",
+          "agent_type": "general-purpose"
+        }
+      ],
+      "guard_permissions": [],
+      "permission_metadata": [
+        {
+          "id": "toolu_01EFJ9xmQXBjejdUnZEsfJ5L",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "config",
+            "reason_type": "rule"
+          }
+        },
+        {
+          "id": "toolu_01JBULGdT1ct8ZMHeCrUr63W",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "config",
+            "reason_type": "rule"
+          }
+        }
+      ],
+      "denial_count": 0,
+      "result_errors": [
+        false,
+        false
+      ],
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-mode-supplement.5aeyiyck/log/runs/05-dontAsk-child.jsonl",
+      "requested_commands": []
+    }
+  ],
+  "interactive_observed_inputs": [
+    {
+      "tool_name": "Bash",
+      "permission_mode": "plan",
+      "agent_id": null,
+      "agent_type": null
+    },
+    {
+      "tool_name": "Bash",
+      "permission_mode": "auto",
+      "agent_id": null,
+      "agent_type": null
+    },
+    {
+      "tool_name": "Bash",
+      "permission_mode": "auto",
+      "agent_id": null,
+      "agent_type": null
+    }
+  ],
+  "interactive_guard_permissions": [
+    {
+      "action": "bash_wrapped",
+      "decision": "ask",
+      "event": "PreToolUse",
+      "ms": 66.5,
+      "permission": {
+        "mode": "plan",
+        "step": 7
+      },
+      "tool": "Bash",
+      "ts": "2026-11-18T18:24:38Z"
+    },
+    {
+      "action": "bash_wrapped",
+      "decision": null,
+      "event": "PreToolUse",
+      "ms": 68.1,
+      "permission": {
+        "mode": "auto",
+        "step": 8
+      },
+      "tool": "Bash",
+      "ts": "2026-11-18T18:25:20Z"
+    },
+    {
+      "action": "bash_wrapped",
+      "decision": "ask",
+      "event": "PreToolUse",
+      "ms": 40.6,
+      "permission": {
+        "mode": "auto",
+        "step": 3
+      },
+      "tool": "Bash",
+      "ts": "2026-11-18T18:25:50Z"
+    }
+  ],
+  "interactive_cases": [
+    {
+      "case": "plan-exact-allow",
+      "result": "prompted; No interrupted"
+    },
+    {
+      "case": "auto-deferred-date",
+      "result": "ran without prompt; UI Allowed by auto mode"
+    },
+    {
+      "case": "auto-explicit-ask-rule",
+      "result": "prompted; No interrupted"
+    }
+  ]
+}

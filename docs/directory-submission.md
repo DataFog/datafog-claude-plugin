@@ -22,7 +22,7 @@ Keep auto-publish off. Select a release tag containing the reviewed commit, reco
 - Three slash commands, four hook events, two local MCP tools, Python engine, shell launcher and bootstrap are bundled.
 - Exact-pin validation: 24 CLI/plugin tests passed with one network test skipped; that network bootstrap case then passed separately with `DATAFOG_TEST_NETWORK=1`. Ruff and `git diff --check` passed.
 - Bootstrap now pins `datafog-core==1.7.0` and `datafog-fogvault==1.7.0`, matching engine constants, pyproject, CI and documented install commands. This directly addresses the prior reviewer request; final portal confirmation remains necessary.
-- CI parses JSON and runs shell parsing, Ruff, mypy and pytest on macOS/Linux with Python 3.10/3.12. A new isolated strict-manifest job uses Claude Code 2.1.327; local execution passed, but the changed CI workflow still needs a candidate run. See [verification and homepage plan](release-verification-plan.md).
+- CI parses JSON and runs shell parsing, Ruff, mypy and pytest on macOS/Linux with Python 3.10/3.12. A new isolated strict-manifest job uses Claude Code 2.1.327; local execution and the final candidate CI manifest job passed; the four platform test jobs remain pending. See [verification and homepage plan](release-verification-plan.md).
 
 ## Directory-specific remaining gates
 
@@ -31,11 +31,11 @@ Keep auto-publish off. Select a release tag containing the reviewed commit, reco
 | D01 | Existing submission found; resume it rather than migrate or duplicate. Reconfirm push access at resubmission. | Portal ID/status recorded above; no migration needed. |
 | D02 | PRIVACY.md and manifest link added locally; publish with reviewed release. | Public policy URL must resolve after push and match final behavior. |
 | D03 | Support URL added; SECURITY.md and private GitHub vulnerability reporting enabled. Portal contact matches authenticated Gmail profile. | Mailbox access confirmed; final public-doc URLs await merge. No test email was sent or portal badge claimed. |
-| D04 | Provide three runnable synthetic reviewer examples. | Read/tokenization, Bash output filtering, marker-aware edit; expected output and disk-state assertions. |
+| D04 | Provide three runnable synthetic reviewer examples. | All three passed in real cached candidate sessions with source hashes and disk-state assertions; see verification/2026-11-18-installed-candidate.md. |
 | D05 | MCP annotations added by implementation workstream. | Focused MCP tests pass; final integrated suite still required. |
 | D06 | Narrow all listing claims to detected values and disclosed limits. | Manifest, marketplace, README and GitHub About now describe detected values. Homepage release-copy update is drafted for publication; directory availability is not announced. |
 | D07 | Portal now restricted to Claude Code; keep unsupported app claims out of listing. | Settings saved and verified Code on, Cowork/apps off. |
-| D08 | Run a clean cached marketplace install, upgrade and uninstall scenario. | Exact release installed outside source checkout; hooks and MCP start; settings and vault retention behave as documented. |
+| D08 | Run a clean cached marketplace install, upgrade and uninstall scenario. | Cached candidate startup passed; fresh 0.2.0→0.2.1 upgrade preserved markers and uninstall retention passed. Final public release URL verification remains open; see verification/marketplace-install.md. |
 | D09 | Establish dependency provenance/reproducibility and bootstrap failure coverage. | Exact resolved distributions, source/index behavior and network needs recorded; cold install succeeds on both supported platforms. |
 | D10 | Assess permission/sandbox integration against directory policy. | Interactive verification report and reviewer explanation for wrapper behavior; no claim of sandbox compatibility without testing. |
 | D11 | Portal validation of final pushed release; address every blocking result. | Saved finding report tied to SHA, including any reviewer holds and responses. |
@@ -47,6 +47,13 @@ D02–D05 reflect policy requirements for privacy, contact/support, sample use c
 ## Portal scanner preflight
 
 Check the final archive for valid portable names, ordinary files, contained paths, supported readable file types, no OS junk or rewriting Git attributes, and size/count limits (50 MiB archive, 256 MiB unpacked, fewer than 10,000 entries; individual files under 5 MiB). Reviewer thresholds include 512 files and 256 KiB non-image/font files. Verify unique name, manifest, README, license, component schemas, front matter and absence of real credentials. Launchers require exact package pins; registry overrides and opaque execution can block or hold review. [Official checklist](https://claude.com/docs/plugins/pre-submission-checklist).
+
+Local archive preflight for `fe1bd1c848880fc4c3c6015c136d5fd9ff28c1e0` used
+`git archive --format=tar HEAD`: 1,075,200 archive bytes, 98 entries (84 files),
+996,706 unpacked file bytes; largest file 77,973 bytes. No absolute/parent-traversal
+or backslash paths, special entries, OS junk, or files at least 5 MiB were found.
+This checks those packaging limits only; it does not certify credential absence,
+policy compliance or the portal's scan. Repeat against the final release revision.
 
 **Expected holds, not confirmed portal findings:** the MCP command uses `sh`; its launcher invokes another shell file and Python; bootstrap installs registry packages. The launcher derives its root using `dirname/..`, which could trigger a containment finding even though the computed root is inside the plugin. Do not redesign working bootstrapping merely to suppress an inferred hold: run the portal validator and resolve its actual result. Prepare a readable entry-point/dependency explanation for reviewers.
 

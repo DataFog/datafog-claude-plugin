@@ -25,16 +25,29 @@ Independent review reproduced and verified fixes for an alias-retarget permissio
 race and repeated email-tail scanning. Cached 0.2.1 model sessions passed Read,
 Bash, marker-aware edit and outside-project refusal, with installed production-file
 hashes matching the candidate. The 0.2.0 → 0.2.1 upgrade retained marker identity.
-Full-suite and CI results remain to be attached below.
+Candidate evidence is recorded below; the final CI matrix remains open.
 
-## Validation to attach
+## Candidate validation
 
-- Exact candidate commit and version agreement.
-- Full Python suite, lint, types, shell parsing and strict manifests.
-- Linux/macOS CI matrix, including private Secret Service tests on Linux.
-- Real Claude Code read, Bash and marker-aware edit examples.
-- Interactive permission behavior, host modes and runner lifecycle evidence.
-- Candidate cached install, version-changing upgrade and uninstall retention.
+Candidate `fe1bd1c848880fc4c3c6015c136d5fd9ff28c1e0` retains the production files
+from live-tested `aa99659a0f3218c443a6fcbc17dbeb9e43537574` unchanged.
+
+- Main real-Claude suite: 187 PASS, 24 INFO, no failures or cap skips.
+- Cached installed candidate: fresh startup, Read, Bash, marker-aware edit and
+  outside-project refusal passed with installed production hashes verified.
+- Fresh 0.2.0→0.2.1 upgrade preserved markers; uninstall retention was checked.
+- Interactive permission, cancellation and macOS sandbox results are recorded in
+  the host report, including host limitations and unverified environments.
+- Six isolated Linux keyring tests passed, including locked-keyring refusal and
+  recovery without rekeying or file-key fallback.
+- Local lint, types and strict manifests passed. The actual `/bin/sh` fallback's
+  27 cases passed after diagnosing an unrelated standalone Apple dash crash.
+- The [final CI matrix](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44368890375)
+  is still running; this candidate is not yet declared ready to release.
+
+See [candidate validation](verification/candidate-validation.md) for original
+failed runs, corrections, evidence links and scope. These results do not imply
+portal acceptance or publication.
 
 ## Remaining product boundaries
 

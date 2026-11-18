@@ -1,0 +1,43 @@
+Claude Code 2.1.327 real screen-reader PTY, synthetic fixture. Paths redacted. No selected for both prompts.
+
+plan mode:
+Permission Required: Bash command
+> Print current working directory
+> . <PLUGIN_ROOT>/scripts/wrap.sh &&
+> __datafog_run
+> <PLUGIN_ROOT>/scripts/datafog-guard
+> <TEMP>/data
+> <TEMP>/vault pwd
+> Hook PreToolUse:Bash requires confirmation for this command:
+> DataFog: plan mode. allowed by a Bash allow rule in your Claude Code local
+> project settings. The plugin does not approve commands while planning.
+> [plugin:datafog]
+plugin hooks.json to update hooks
+Do you want to proceed?
+1. Yes
+2. No
+Select with numbers [1-2]. Then Enter to submit or Escape to cancel:
+
+---
+auto mode:
+Permission Required: Bash command
+> Dry-run a git push
+> . <PLUGIN_ROOT>/scripts/wrap.sh &&
+> __datafog_run
+> <PLUGIN_ROOT>/scripts/datafog-guard
+> <TEMP>/data
+> <TEMP>/vault 'git push --dry-run'
+> Hook PreToolUse:Bash requires confirmation for this command:
+> DataFog: a Bash ask rule in your Claude Code project settings matches this
+> command (or a part of it). [plugin:datafog]
+plugin hooks.json to update hooks
+Do you want to proceed?
+1. Yes
+2. No
+Select with numbers [1-2]. Then Enter to submit or Escape to cancel:
+
+---
+auto mode execution excerpt:
+2026
+Allowed by auto mode
+claude: The command printed 2026.

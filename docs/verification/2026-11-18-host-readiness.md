@@ -74,10 +74,8 @@ observations but do not certify the final source revision.
 
 ## Still unverified
 
-- Interactive plan and auto behavior beyond marker asks; auto classifier handling
-  of the rewritten command; dontAsk allow path.
-- `default` hook input value and other permission modes inside subagents (the
-  observed child used `acceptEdits`).
+- Arbitrary auto-classifier decisions and other command/permission combinations
+  beyond the finite mode checks below; all subagent types/mode combinations.
 - Additional Bash and Read/Edit rule parity beyond existing documented fixtures.
 - Alternate configuration-root trust handling, server-managed policy and MDM.
 - Locked/denied macOS Keychain, SSH/login/rebuilt-interpreter access; KWallet and
@@ -125,3 +123,31 @@ rejection and fixture-settings isolation. The new supplementary probes use the
 real host directly; their successful observations are listed above rather than
 inferred from simulator behavior. Sandbox options follow the official
 [settings reference](https://code.claude.com/docs/en/settings-reference).
+
+## Finite permission-mode follow-up
+
+Five additional headless runs and two real PTY sessions on **2.1.327** closed the
+remaining representative V04/V05 checks. They reused the existing live Driver
+with synthetic fixtures and a file-key vault; no production code or tracked test
+harness changed. Source revision was `fe1bd1c`. The observer saved only tool name,
+tool-use ID, permission mode and agent metadata. See
+[structured results](mode-supplement-results.json) and
+[interactive excerpts](mode-supplement-interactive.txt).
+
+| Probe | Actual behavior and evidence |
+| --- | --- |
+| `default` exact-rule allow | `pwd` ran; guard recorded step 7 `allow`; actual hook input was the literal `default`. |
+| `dontAsk` exact-rule allow | `pwd` ran without a denial; guard recorded step 7 `allow` and input `dontAsk`. This complements the earlier dontAsk marker denial. |
+| `auto` deferred wrapper | No fixture rule allowed `date -u +%Y`. Guard recorded step 8 with a null decision and supplied the rewritten runner command. Host debug recorded that updated input; matching `tool_result_meta.permission_decision` reported `decision=accept`, `source=config`, `reason_type=classifier`. The command returned `2026`. This is actual classifier-attributed acceptance, not an inference from a successful command alone. |
+| Interactive `auto` deferred wrapper | The same date command ran with no approval prompt; the UI showed `Allowed by auto mode`. Observer/guard records confirmed `auto`, step 8, null hook decision. |
+| Interactive `plan` exact-rule allow | `pwd` matched a fixture allow rule, but the hook returned ask with its plan-mode explanation. The UI prompted; selecting No interrupted the call. The hook did not silently approve a read-only command in plan mode. |
+| Interactive `auto` explicit ask rule | `git push --dry-run` matched the fixture ask rule and prompted with its rule explanation; selecting No interrupted it. The folder had no Git repository or remote, and the command was not executed. This verifies a nonmarker ask independently of marker restoration. |
+| General-purpose child under `plan` | Parent Agent and child Read both received literal `plan`; the child was identified by its own agent ID and completed the allowed read. |
+| General-purpose child under `dontAsk` | Parent Agent and child Read both received literal `dontAsk`; the child was identified by its own agent ID and completed the allowed read. Together with the earlier acceptEdits case, these are representative inherited modes, not every possible subagent configuration. |
+
+Both PTY sessions were exited. The host's own `claude purge <generated-project>
+--yes` removed only these fixtures' local host records, trust and prompt history.
+Synthetic raw evidence remains in their temporary log directories. No credentials
+were copied, no real vault was opened, and no user-owned project was modified.
+The classifier result characterizes this safe command on this host version; it
+does not promise how the classifier will judge arbitrary commands or future hosts.

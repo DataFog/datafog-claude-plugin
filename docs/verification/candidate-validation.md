@@ -54,9 +54,12 @@ unlock protocol. All six private keyring tests passed in an isolated Ubuntu 24.0
 container, including locked-state refusal, no rekey or file-key fallback, and recovery
 of the original marker. See [Linux keyring evidence](linux-keyring.md).
 
-The revised four-way platform matrix must pass before submission. CI for `276b2b3` is
-[run 44365243455](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44365243455).
-Strict manifest validation has passed. Local lint and mypy pass on 21 engine modules.
+The revised four-way platform matrix must pass before submission. Final fixture
+and evidence commit `fe1bd1c` is being tested by
+[run 44368890375](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44368890375).
+Its strict manifest job passed; platform tests remain pending. Local lint and mypy
+pass on 21 engine modules. The previous run for `276b2b3` was cancelled after its
+Linux fixture failure once the corrected candidate run started; it is not green evidence.
 
 An earlier local full-suite attempt was intentionally interrupted when the failed
 dependency-upgrade gap was found. It is not release evidence. The earlier GitHub
