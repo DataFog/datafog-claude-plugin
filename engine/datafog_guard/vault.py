@@ -264,6 +264,10 @@ def _fold(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
+def _is_word(char: str) -> bool:
+    return char == "_" or char.isalnum()
+
+
 def _value_pattern(value: str):
     """A value as core's recall matched it: any white space between its parts, any case, and not
     directly against a letter, digit or underscore where the value itself begins or ends with one."""
@@ -343,14 +347,35 @@ class Vault:
             entity = marker_label(known.marker_of[values[0]])
             if any(value in self.detector.allowlist for value in values):
                 continue
-            for match in _value_pattern(values[0]).finditer(text):
-                start, end = match.span()
+            for start, end in self._occurrences(values[0], key, text, folded_text):
                 if any(left < end and start < right for left, right in markers):
                     continue
                 if not ascii_only:
+                    size = len(text[start:end].encode("utf-8", "surrogatepass"))
                     start = len(text[:start].encode("utf-8", "surrogatepass"))
-                    end = start + len(match.group().encode("utf-8", "surrogatepass"))
+                    end = start + size
                 out.append(Span(start, end, entity, True))
+
+    @staticmethod
+    def _occurrences(value: str, key: str, text: str, folded_text: str):
+        """Character ranges where ``value`` stands in ``text`` (see :func:`_value_pattern`).
+
+        The usual case, every occurrence spelled exactly as stored, is a plain search; a regular
+        expression is only built when case or white space differ somewhere."""
+        if text.count(value) != folded_text.count(key):
+            return [match.span() for match in _value_pattern(value).finditer(text)]
+        found = []
+        size, edge_left, edge_right = len(value), _is_word(value[0]), _is_word(value[-1])
+        position = text.find(value)
+        while position >= 0:
+            end = position + size
+            if not (edge_left and position and _is_word(text[position - 1])) and \
+                    not (edge_right and end < len(text) and _is_word(text[end])):
+                found.append((position, end))
+                position = text.find(value, end)
+            else:
+                position = text.find(value, position + 1)
+        return found
 
     def _raw_spans(self, known: _Known | None, text: str) -> list[Span]:
         """Detector findings plus known values for one text, as byte spans into that text."""
@@ -626,8 +651,11 @@ class Vault:
                 return [], 0
             matches = list(ANY_CASE_MARKER_RE.finditer(text))
             try:
-                unknown = self._restore(text, depth=0).unknown
+                # One call to core for all markers (each call re-reads and decrypts the vault).
                 values = self.store.values_for([match.group(0) for match in matches])
+                unknown = sum(1 for match in matches if match.group(0) not in values)
+                if len(values) < len({match.group(0) for match in matches}) or not matches:
+                    unknown = self._restore(text, depth=0).unknown     # the exact count core would report
             except StoreError as error:
                 if error.code == "no_vault":
                     return [], len(matches)

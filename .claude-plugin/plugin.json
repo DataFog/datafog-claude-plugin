@@ -15,7 +15,7 @@
     "keep_vault_on_uninstall": {
       "type": "boolean",
       "title": "Keep the vault when the plugin is uninstalled",
-      "description": "On: the vault (the table that turns markers back into your real values) is stored in your user data folder and survives an uninstall. Off: it is stored in the plugin's data folder, which Claude Code deletes on uninstall; markers left in your files can then never be restored.",
+      "description": "On: the encrypted vault (the table that turns markers back into your real values) is stored in your user data folder and survives an uninstall, and its key stays in your key store. Off: it is stored in the plugin's data folder, which Claude Code deletes on uninstall; markers left in your files can then never be restored.",
       "default": true
     },
     "unscannable_file_policy": {

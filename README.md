@@ -21,16 +21,46 @@ values (the vault) never leaves your machine and is never shown to the model.
 
 **Status: 0.2.0-dev. Not released.** The design rests on a 31-run spike against
 Claude Code 2.1.299, and the engine has an automated test suite, but this build has
-not yet been run in a live Claude Code session. [What is not verified yet](#not-verified-yet)
+not yet been run in a live Claude Code session, and its use of the macOS Keychain has not
+been run on a Mac at all. [What is not verified yet](#not-verified-yet)
 lists every such point. Read [Known gaps](#known-gaps) before you rely on it.
 
 ## Requirements
 
 - Claude Code **2.1.295 or later** (the plugin depends on `onFailure: "block"` for hooks).
-- macOS or Linux, with `sh` and `bash` or `zsh`. Windows is not supported in this version.
+- **A supported machine** (see [Supported machines](#supported-machines)): macOS on Apple
+  Silicon, or Linux on x86_64 with glibc 2.38 or later, each with a key store the plugin can
+  use. Anywhere else the plugin does not run and blocks tool calls; there is no reduced mode.
+- `sh` and `bash` or `zsh`.
 - `uv`, or Python 3.10 or later with `pip`, and access to PyPI on first start. The plugin
-  builds a private Python environment in its data directory and installs one dependency,
-  `datafog-core>=1.7.0,<1.8`. Detection runs locally; nothing is sent anywhere.
+  builds a private Python environment in its data directory and installs two packages of
+  the DataFog core project: `datafog-core>=1.7.0,<1.8` (the detector) and
+  `datafog-fogvault>=1.7.0,<1.8` (the encrypted vault). Detection and storage are local;
+  nothing is sent anywhere.
+
+### Supported machines
+
+| Machine | Supported | Vault key is kept in |
+| :- | :- | :- |
+| macOS 11 or later on Apple Silicon (arm64) | yes | the login Keychain |
+| Linux x86_64, glibc 2.38 or later (Ubuntu 24.04, Debian 13, Fedora 39 and later), desktop session | yes | the Secret Service (GNOME Keyring, KWallet) |
+| The same Linux without a Secret Service (server, container, SSH session, CI) | only with `vault_key: file`, which is weaker; see [The vault](#the-vault) | a file beside the vault |
+| macOS on Intel | **no** | |
+| Linux on ARM, or with an older glibc (Ubuntu 22.04, Debian 12, RHEL 9, Amazon Linux 2023), or with musl (Alpine) | **no** | |
+| Windows | **no** (the vault library exists for Windows x64; the rest of the plugin does not yet) | |
+
+The limit comes from the vault: `datafog-fogvault` 1.7.0 is published as compiled packages
+for exactly `macosx_11_0_arm64`, `manylinux_2_38_x86_64` and `win_amd64`, and the plugin has
+no other place to keep values. **On an unsupported machine it fails closed.** The installer,
+the session start line, every hook, `/datafog:status` and `/datafog:doctor` give the same
+message, and tool calls are blocked until you disable or uninstall the plugin:
+
+```
+DataFog does not support this machine. It needs macOS on Apple Silicon, or Linux on x86_64 with glibc 2.38 or later. Nothing is protected and tool calls are blocked; disable or uninstall the plugin to work without it.
+```
+
+The same holds when the key store cannot be used (locked, missing, access refused): the
+message names the key store, and nothing runs unprotected.
 
 ## Install
 
@@ -42,8 +72,12 @@ Start a new session. The first start installs the private environment (a few sec
 and prints one status line, for example:
 
 ```
-DataFog guard: on. Vault: user data folder (kept on uninstall), not encrypted at rest. Bash output: filtered. Markers in Bash commands: ask. Detecting: EMAIL, PHONE, ...
+DataFog guard: on. Vault: user data folder (kept on uninstall), encrypted, key in the system key store. Bash output: filtered. Markers in Bash commands: ask. Detecting: EMAIL, PHONE, ...
 ```
+
+The first start also creates the vault and stores its key in your key store. On macOS this
+adds one entry to the login Keychain (service `DataFog.ApplicationVault.v1`); macOS may ask
+you to allow access, see [Not verified yet](#not-verified-yet).
 
 If the environment cannot be installed, the status line says exactly which command to
 run, and every tool call is blocked until it is fixed. The plugin does not run
@@ -61,6 +95,8 @@ Off by default because they are noisy in code, and can be turned on: `DATE`,
 
 Once a value is in the vault it is also recognised wherever it appears again, even
 where the scanner alone would miss it (for example an account number without its label).
+It is matched as a whole value, whatever its case and however its parts are spaced, and
+not inside a longer word or number (`000123456789` is not found inside `x000123456789y`).
 
 An e-mail address is replaced without the text joined in front of it: in
 `user=ada&email=ada@example.com`, `1042|Ada|ada@example.com|active` or a URL query string,
@@ -93,7 +129,7 @@ the value). Digits written directly onto an address with no separator
 | **Bash permissions** | The plugin decides `allow`, `ask` or `deny` from your own Claude Code rules, applied to the command as Claude wrote it. See [Bash permissions](#bash-permissions). | The command does not run. |
 | **Write**, **Edit**, **NotebookEdit** | Markers in the new content are swapped for real values before the tool runs. The built-in tool needs the real content, so it is handed over in the tool input, and **Claude Code records that input in its transcript.** | The write is blocked. |
 | **Grep**, **Glob** | Markers in the pattern and path are swapped for real values (handed over in the tool input, so **recorded in Claude Code's transcript**, like Write); Grep output is tokenized after the tool ran. | See next row. |
-| **Grep, WebFetch, WebSearch, MCP tools, subagent results, any other tool** | Output is tokenized after the tool ran. Before the tool runs, the plugin checks that the vault opens, the lock works and the detector finds a test value, and refuses the call if not. | If the plugin breaks *between* that check and the result (hard crash, timeout), **the raw output reaches the model.** Claude Code offers no way to prevent this for output that only exists after a tool ran. |
+| **Grep, WebFetch, WebSearch, MCP tools, subagent results, any other tool** | Output is tokenized after the tool ran. Before the tool runs, the plugin checks that the vault opens (its lock can be taken, its key is available, it decrypts) and that the detector finds a test value, and refuses the call if not. | If the plugin breaks *between* that check and the result (hard crash, timeout), **the raw output reaches the model.** Claude Code offers no way to prevent this for output that only exists after a tool ran. |
 | **Your prompt** | Scanned when you submit it. If it holds values, it is not sent; you are shown the same prompt with markers to submit instead. A plugin cannot rewrite a prompt. | The prompt is blocked. |
 | **`@file` and `@directory` mentions** | Blocked when a mentioned file, or any file in a mentioned directory, holds values or cannot be checked; you are told to ask Claude to read the files instead. Directories are checked up to 200 files, 8 MiB and 4 levels; beyond that the prompt is blocked with the reason. See [settings](#settings-the-plugin-cannot-set-for-you). | The prompt is blocked. |
 | **Subagents** | The same hooks run for a subagent's tool calls. | As above. |
@@ -125,9 +161,8 @@ Consequences you will notice:
 - `NO_COLOR=1` and `CLICOLOR=0` are set for commands. Colour codes that still appear are
   handled (see below), this only reduces noise.
 - Each command costs about 70 ms extra for the runner, and the PreToolUse hook takes about
-  45 ms (10 ms of it inside the engine, the rest is starting Python). Measured on a Linux
-  container; reading your permission rules and the late swap added about 2 ms to the hook
-  and nothing measurable to the runner.
+  50 ms (most of it is starting Python). Measured on a Linux container; see
+  [Speed](#speed) for the numbers with the encrypted vault.
 
 Values split or hidden by terminal control sequences are still found. Detection also runs
 on the text with escape sequences and invisible characters removed, and on the text as a
@@ -437,11 +472,17 @@ Ways a real value can still reach the model or leave a trace.
    output before the plugin replaces it.
 10. **Claude Code's own records hold real values for file tools, not for Bash.** See
     [Traces left in Claude Code's records](#traces-left-in-claude-codes-records).
-11. **The vault is not encrypted at rest in this version.** It is protected by owner-only
-    file permissions (directory `0700`, files `0600`). Anyone who can read your files can
-    read it. The plugin refuses Read, Write, Edit and Grep on the vault directory and Bash
-    commands that name it; a command that reaches it indirectly is only covered by the
-    output filter.
+11. **The vault is encrypted at rest, and that protects against less than it may sound.**
+    The file on disk is ciphertext and its key is in your operating system's key store, so
+    a copy of the file (a backup, a synced folder, a stolen disk image without your login)
+    reveals no value. It does **not** protect against a program running as you while you
+    are logged in: such a program can ask the key store for the key the same way the plugin
+    does, or start the plugin's own Python. The plugin refuses Read, Write, Edit and Grep on
+    the vault directory and Bash commands that name it; a command that reaches it indirectly
+    is only covered by the output filter. With `vault_key: file` the key lies beside the
+    data and a copy of the directory reveals everything. What is **not** encrypted: the
+    marker index (the markers issued, no values), the number of values, the vault's ids and
+    revision, and the key that signs restore tickets for Bash commands.
 12. **Bash, Read and Edit permission rules that the plugin cannot read are not enforced for
     Bash commands**, commands that are not simple always ask, and a `Read` deny rule does not
     stop a command that reads the file without naming it. See [Bash permissions](#bash-permissions).
@@ -486,11 +527,12 @@ Behaviour worth knowing that is not a leak:
 - **Markers the vault does not know** (wrong label, changed code, from a purged vault) are
   left exactly as written and reported to Claude as a count. Lower-cased markers are
   accepted, as core defines them. One unknown marker never fails a whole write.
-- **Limits.** Core allows 20,000 values in a vault, and its known-value matching stops
-  working when the stored values pass roughly 256 KiB in total, which can come first.
-  At either limit the plugin stops (new values cannot be protected) and says so; the
-  remedy today is `/datafog:purge`. `recall_required: false` trades the second limit
-  for detector-only matching.
+- **Limits.** Core allows 20,000 values in a vault, and about 100,000 changes to it (each
+  batch of *new* values is one change; values the vault already holds cost none). At the
+  limit the plugin stops (new values cannot be protected) and says so; values it already
+  holds keep working. The remedy today is `/datafog:purge`.
+- **Each process that replaces values holds the vault's values in its memory** while it
+  runs (to recognise them), as core's own code did before.
 
 ## Traces left in Claude Code's records
 
@@ -538,6 +580,21 @@ Design decisions that were considered and settled, so they are not reopened by a
   be checked asks.** Denying everything that might touch a covered path (every glob, every
   directory) was rejected: it would make such rules unusable. Allowing it was rejected
   too: it would let a rule be bypassed with `cat s*.env`.
+- **One encrypted vault, no unencrypted fallback.** Values are kept only in core's
+  application vault. A machine without the vault library or without a usable key store is
+  not supported: the plugin fails closed there instead of storing values in the clear. The
+  unencrypted file store of earlier development builds is gone and is not migrated.
+- **The key store is the default; a key file is an explicit, documented downgrade**
+  (`vault_key: file`) for machines that have no key store, never chosen automatically.
+- **Known values are matched by the plugin, from a marker index.** Core's application vault
+  has no way to look a value up without writing, and no known-value matching. The plugin
+  keeps the list of markers it issued (not secret, not authoritative) and restores them in
+  memory to recognise values. Asking core to store every detected value again was rejected:
+  it rewrites the whole vault each time and uses up core's limit of about 100,000 changes.
+- **The Bash restore-ticket key stays a small file in the vault directory**, not an entry in
+  the vault. It guards against a command starting the runner by itself, not against a
+  program that can read your files, and such a program could equally open the vault through
+  the key store. Putting it in the vault would add a marker that must never be restored.
 - **The test-only switch `DATAFOG_TEST_ALLOW_WRAPPED_BASH` was removed.** Tests and the
   live driver use settings files, like a user would.
 
@@ -587,7 +644,10 @@ and denies nearly every Bash command.
 
 ## The vault
 
-One vault serves all your projects, so a value has the same marker everywhere.
+The vault is the table that maps markers to real values. There is **one vault for this
+plugin, shared by all your projects**, so a value has the same marker everywhere.
+
+**Where it lives**
 
 | | Location |
 | :- | :- |
@@ -595,20 +655,119 @@ One vault serves all your projects, so a value has the same marker everywhere.
 | "Keep the vault when the plugin is uninstalled" is on (default) | macOS `~/Library/Application Support/DataFog/vaults/claude-code`; Linux `$XDG_DATA_HOME/datafog/vaults/claude-code` or `~/.local/share/datafog/vaults/claude-code` |
 | the option is off | `${CLAUDE_PLUGIN_DATA}/vault`, which Claude Code deletes when the plugin is uninstalled |
 
-It holds `datafog-core`'s workspace snapshot unmodified, a pointer file and a small
-metadata file. **It is not encrypted at rest.** Writes are atomic, and concurrent
-sessions are coordinated with a file lock and a compare-and-save on the vault's head.
+**How it is stored.** The plugin uses the application vault of the DataFog core project
+(`ApplicationVault` in the `datafog-fogvault` package) and adds two small files of its own:
+
+| File | Mode | What it is |
+| :- | :- | :- |
+| `workspace.enc` | 0600 | Core's vault: every value, encrypted (XChaCha20-Poly1305, a 256-bit random key). The application id, a random vault id, the revision and the key mode are readable in its header; the values are not. |
+| `workspace.lock` | 0600 | Core's lock file. Every change holds it from reading the vault to the finished, flushed write. |
+| `workspace.key` | 0600 | **Only with `vault_key: file`.** The key itself. |
+| `markers.index` | 0600 | The plugin's list of markers issued so far (such as `[[EMAIL_7KQ4ZM]]`). No values. It lets the plugin recognise known values and count them without changing the vault; if it is lost or damaged, nothing breaks and it fills up again. |
+| `bash-restore.key` | 0600 | The plugin's key for signing restore tickets ([Markers in Bash commands](#markers-in-bash-commands)). Not the vault key, and it decrypts nothing. |
+
+The directory is 0700. The plugin makes a new or still empty directory private itself. If
+the directory or a file of an existing vault is open to other users, is not yours, or the
+vault directory is a symbolic link, the vault is refused and nothing is repaired silently:
+`/datafog:doctor` says which.
+
+**Where the key is.** By default (`vault_key: keystore`) the key is created once, stored in
+your operating system's key store, and read from there by every plugin process:
+
+- macOS: the login Keychain, one entry with service `DataFog.ApplicationVault.v1` and
+  account `claude-code/<vault id>`.
+- Linux: the Secret Service (GNOME Keyring, KWallet), same service and account.
+
+Each vault directory has its own vault id and its own key, so two different
+`DATAFOG_VAULT_DIR`s never share one. The key is never written to a file, a log, an
+environment variable or a command line by the plugin; it is handled inside core's compiled
+code only.
+
+If the key store is locked, not running or refuses access, the plugin stops with
+`keystore_unavailable` and blocks tool calls. It never creates a second key for an existing
+vault and never switches to a key file on its own. If the entry was deleted from the key
+store, the vault cannot be opened again by anyone: delete it with `/datafog:purge`.
+
+**`vault_key: file` (opt-in, weaker).** For machines without a key store (a Linux server,
+a container, CI) you can set `vault_key` to `file` in `config.json`, or
+`DATAFOG_VAULT_KEY=file`, **before the vault is first created**. The key is then a file,
+`workspace.key`, in the vault directory. The vault file is still ciphertext, but anyone who
+can copy the directory has both, so this protects only against someone who gets
+`workspace.enc` alone. A vault keeps the mode it was created with: opening it with the other
+setting fails with `vault_key_mismatch` (purge it to change).
+
+**Several sessions at once.** Hooks are separate short processes and may run in parallel,
+next to the long-lived Bash runner and the plugin's MCP server. Changes are serialised by
+core's lock and each one is written completely and flushed before a marker is handed out, so
+a crash leaves the old vault or the new one, never half of one. A value that is already known
+is recognised without writing.
+
+**Uninstalling: keep or delete.** This is the plugin option "Keep the vault when the plugin
+is uninstalled":
+
+- **On (default): keep.** The vault stays in your user data folder and its key stays in
+  your key store. Markers that are still in your files can be restored after you install
+  the plugin again. To remove everything later, run `/datafog:purge` before uninstalling, or
+  delete the folder above and the key store entry by hand.
+- **Off: delete.** The vault is in the plugin's data folder and Claude Code deletes it on
+  uninstall. The key store entry is left behind (Claude Code does not know about it); it is
+  32 random bytes that open nothing once the vault file is gone. Run `/datafog:purge` before
+  uninstalling to remove it too, or delete it in Keychain Access (search for `DataFog`).
+
+`/datafog:purge` deletes the vault file, the marker index, the ticket key, the key file if
+there is one, and the entry in the key store (on macOS with `security
+delete-generic-password`, on Linux with `secret-tool`, because core has no call for it; if
+that fails, purge tells you the service and account to delete by hand).
 
 If the vault is deleted, every marker issued from it is meaningless. Text that still
 holds markers (a file Claude wrote through another tool, notes, old transcripts) can
 then never be turned back into real values.
 
+**Coming from a development build.** Builds before this one kept the vault unencrypted in
+the same directory (`HEAD`, `meta.json`, `snapshots/`). This version never reads those
+files. `/datafog:status` and `/datafog:doctor` say so when they are still there, and
+`/datafog:purge` deletes them; nothing is migrated.
+
+**Limits of the vault library (core 1.7.0) worth knowing:**
+
+- **Every directory above the vault must be listable by you**, not only passable. On a
+  shared Linux machine where `/home` has mode 0711 the vault cannot be opened
+  (`vault_unreadable`). Put the vault elsewhere with `DATAFOG_VAULT_DIR`.
+- Core waits at most 5 seconds for the vault's lock; the plugin retries up to
+  `DATAFOG_LOCK_TIMEOUT` (default 10) seconds in total and then stops with `vault_locked`.
+- Restoring an older copy of the vault directory rolls the vault back; markers issued since
+  are then unknown. The encryption does not detect that.
+- 20,000 values and about 100,000 changes per vault; see [Known gaps](#known-gaps).
+
+### Speed
+
+Wall time of one whole process (starting Python, opening the vault, the work), median and
+95th percentile of 40 runs, on a Linux x86_64 container (4 KiB-scale inputs, small vault).
+"Before" is the unencrypted file store of the development build with the same core 1.7.0.
+
+| Process | Before | Encrypted, key in a file | Encrypted, key in the Secret Service |
+| :- | -: | -: | -: |
+| PreToolUse hook for a Bash command | 45 / 61 ms | 50 / 63 ms | 56 / 59 ms |
+| PostToolUse rewrite, 1 known value | 47 / 49 ms | 51 / 65 ms | 58 / 75 ms |
+| PostToolUse rewrite, 10 known values | 46 / 49 ms | 52 / 72 ms | 58 / 96 ms |
+| PostToolUse rewrite, 200 known values | 55 / 66 ms | 55 / 60 ms | 60 / 78 ms |
+| PreToolUse Write, one marker restored | 44 / 55 ms | 47 / 52 ms | 57 / 78 ms |
+| Runner, command without markers | 69 / 83 ms | 72 / 76 ms | 80 / 97 ms |
+| Runner, one marker restored | 73 / 86 ms | 77 / 88 ms | 86 / 116 ms |
+
+Starting Python alone is 11 ms of each. With 19,000 values in the vault a rewrite takes
+about 230 ms (150 ms before) and a Bash command with a marker about 350 ms (185 ms before),
+because core reads and decrypts the whole vault for each operation. **The macOS Keychain
+was not measured** (no Mac was available for this build); the optional live case below does.
+
 ## Commands
 
-- `/datafog:status` shows whether protection is on, where the vault is, and entity types
-  and counts. Never values.
-- `/datafog:doctor` checks the installation and says what to fix.
-- `/datafog:purge` deletes the vault after an explicit confirmation step.
+- `/datafog:status` shows whether protection is on, where the vault is, how it is
+  encrypted and where its key is, and entity types and counts. Never values.
+- `/datafog:doctor` checks the installation and says what to fix: supported machine, both
+  libraries, the vault (permissions, lock, key, decryption), leftovers of a development
+  build, the Bash filter, your permission rules.
+- `/datafog:purge` deletes the vault and its key after an explicit confirmation step.
 
 ## Configuration
 
@@ -634,9 +793,10 @@ More settings go in `config.json` in the plugin's data directory
 | `background_bash` | `DATAFOG_BACKGROUND_BASH` | `deny` | `allow` wraps background commands like any other. |
 | `egress_policy` | `DATAFOG_EGRESS_POLICY` | `ask` | For commands with markers (and restoring not `off`) that look like they send data away: `ask`, `deny`, `allow`. |
 | `restore_in_mcp_input` | | `false` | Swap markers back in input to third-party MCP tools. Real values then leave this process. |
-| `recall_required` | `DATAFOG_RECALL_REQUIRED` | `true` | Stop when known-value matching is unavailable (see Limits). |
+| `vault_key` | `DATAFOG_VAULT_KEY` | `keystore` | Where the vault's key is kept: `keystore` (macOS Keychain, Linux Secret Service) or `file` (beside the vault; weaker, for machines without a key store). Fixed when the vault is created. See [The vault](#the-vault). |
 | `max_scan_bytes` | `DATAFOG_MAX_SCAN_BYTES` | 5 MiB | Larger files count as "cannot be checked". |
-| | `DATAFOG_VAULT_DIR` | | Vault directory. |
+| | `DATAFOG_VAULT_DIR` | | Vault directory. Must be an absolute path whose parent directories you can list. |
+| | `DATAFOG_LOCK_TIMEOUT` | 10 | Seconds to wait for the vault's lock before stopping. |
 
 A setting the plugin cannot understand makes it stop and say so; it does not fall back
 to a default in silence.
@@ -676,6 +836,18 @@ are new in this build. None has been run in a live session with this engine.
     documented examples, and which Bash commands it applies those rules to itself;
   - managed settings: whether a server-managed or MDM policy is in force (invisible to the
     plugin), in which case Claude Code ignores the managed settings *file* the plugin reads.
+- **The macOS Keychain, all of it.** The key-store mode was run on Linux against a private
+  GNOME Keyring only. On a Mac, to be checked by hand or with the optional live case
+  (`LIVE_KEYCHAIN=1`, below): that creating the entry at first start does not prompt; whether
+  macOS asks "python wants to use your confidential information" when a hook reads the key,
+  how often, and what "Always Allow" does; whether the question comes back after the
+  plugin's Python is updated or its private environment is rebuilt (the Keychain ties its
+  permission to the program that created the entry, and that program is the Python in the
+  plugin's data directory); what happens while the Keychain is locked, in an SSH session and
+  right after login; how long reading the key takes in a hook; that a hook waiting on a
+  Keychain question ends as a blocked call and not as an unprotected one; and that
+  `/datafog:purge` removes the entry (`security delete-generic-password`).
+- The Secret Service with KWallet, and with a keyring that is locked when a session starts.
 - Whether Claude Code lets Write or Edit change a file that was read through a redirected
   copy (its read-before-write check may not count that read).
 - What the built-in Edit tool's result shows the model after the plugin replaced it.
@@ -685,26 +857,39 @@ are new in this build. None has been run in a live session with this engine.
 - Anything on Windows.
 
 To run the live check on your machine (about 27 short headless `claude -p` runs in a
-throwaway temp project with a temporary vault; your real vault is not touched; hard caps
-of 30 runs, 180 seconds each, 30 minutes in total):
+throwaway temp project with a temporary vault whose key is a file in the temp directory;
+your real vault and your Keychain are not touched; hard caps of 30 runs, 180 seconds each,
+30 minutes in total):
 
 ```sh
 tests/live/run-live.command          # or double-click it in Finder
 ```
+
+Because of that, the standard run does not exercise the Keychain. One optional, clearly
+separate case does: `LIVE_KEYCHAIN=1 tests/live/run-live.command` adds `L28-keychain`,
+which makes a second throwaway vault with its key in your real key store (one new entry),
+uses it from several processes, measures it, and deletes the vault and that entry again.
 
 Results land in `.live/results/results.md`.
 
 ## Development
 
 ```sh
-uv venv && uv pip install "datafog-core>=1.7.0,<1.8" pytest ruff mypy
+uv venv && uv pip install "datafog-core>=1.7.0,<1.8" "datafog-fogvault>=1.7.0,<1.8" pytest ruff mypy
 DATAFOG_TEST_NETWORK=1 .venv/bin/python -m pytest    # the flag enables tests that build the private environment
 .venv/bin/ruff check . && .venv/bin/mypy
 ```
 
+Tests never use your key store: every test vault keeps its key in a file in the test's
+temp directory. `tests/test_keystore.py` runs the key-store mode against a private Secret
+Service (its own D-Bus session and GNOME Keyring in a temp directory) and needs Linux with
+`dbus-run-session`, `gnome-keyring-daemon` and `secret-tool`; elsewhere it is skipped.
+
 Layout: `engine/datafog_guard/` (the engine; entry `python -m datafog_guard <hook|run|filter|mcp|status|purge|doctor>`),
 `scripts/` (launcher, environment bootstrap, shell wrapper), `hooks/hooks.json`,
-`.mcp.json`, `commands/`, `tests/`, `tests/live/`. For Bash: `shellsub.py` (the lexer that
+`.mcp.json`, `commands/`, `tests/`, `tests/live/`. For the vault: `store.py` (core's encrypted
+application vault, the marker index, purge) and `vault.py` (finding values, assigning markers,
+restoring). For Bash: `shellsub.py` (the lexer that
 puts values into a command as data, with its threat note), `ccperms.py` (reading and applying
 your Claude Code permission rules), `filtercmd.py` (the runner), `bashwrap.py` (the rewrite
 and the restore ticket).
