@@ -24,12 +24,12 @@ PLAIN (the whole command must fit; this is the definition quoted in the README):
 
 Not plain, therefore: outside single quotes, any ``$`` (variables, ``$( )``, ``${ }``, ``$(( ))``,
 ``$'..'``), any backtick and any backslash (escapes and line continuations); unquoted
-``* ? [ ] { } ~user ! # ^ ( )``, ``&`` (background), ``|&``, here-documents, here-strings, ``<>``, ``>|``, process substitution,
-subshells, groups, assignments, comments, a NUL byte, a carriage return, and anything longer
-than MAX_LENGTH. Shell keywords and most builtins are not accepted as a command name
-(:func:`name_problem`): control flow, ``eval``, ``source``, ``export``, ``set``, ``alias`` ... A
-directory-changing command (``cd``, ``pushd``, ``popd``) is plain only as the single command
-of a call, because after it relative paths mean something else.
+``* ? [ ] { } ~user ! # ^ ( )``; ``&`` (background), ``|&``, here-documents, here-strings, ``<>``,
+``>|``, process substitution, subshells, groups, assignments, comments, a NUL byte, a carriage
+return, and anything longer than MAX_LENGTH. Shell keywords and most builtins are not accepted
+as a command name (:func:`name_problem`): control flow, ``eval``, ``source``, ``export``, ``set``,
+``alias`` ... A directory-changing command (``cd``, ``pushd``, ``popd``) is plain only as the single
+command of a call, because after it relative paths mean something else.
 
 Known markers (``[[EMAIL_7KQ4ZM]]``) are passed in by position and count as literal text; any
 other ``[`` outside quotes is a glob and makes the command not plain.
@@ -86,12 +86,13 @@ class Word:
 
 
 class Simple:
-    __slots__ = ("start", "end", "words", "targets")
+    __slots__ = ("start", "end", "words", "targets", "redirected")
 
     def __init__(self, start: int):
         self.start, self.end = start, start
         self.words: list[Word] = []
         self.targets: list[tuple[str, Word]] = []      # (operator, target word) of file redirections
+        self.redirected = False                        # any redirection, descriptor duplication included
 
     @property
     def name(self) -> str:
@@ -236,13 +237,15 @@ def _parse(text: str, markers) -> Plain | None:
                     k = after + 1
                 if k == after or (k < n and text[k] not in " \t\n;|&<>"):
                     return None
-                i = k
+                current.redirected = True
+                current.end = i = k
                 continue
             while after < n and text[after] in " \t":
                 after += 1
             found = word(after) if after < n else None
             if found is None:
                 return None
+            current.redirected = True
             current.targets.append((operator, found[0]))
             current.end = i = found[1]
             continue
@@ -278,7 +281,7 @@ def name_problem(plain: Plain) -> str:
         if not name or "=" in name or name.startswith("-") or first.markers or not base:
             return "name"
         if base in MOVES:
-            if len(plain.commands) > 1 or simple.targets:
+            if len(plain.commands) > 1 or simple.redirected:
                 return "moves"
             continue
         if base in SHELL_WORDS and base not in PLAIN_BUILTINS:

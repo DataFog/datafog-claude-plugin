@@ -340,7 +340,7 @@ def test_pre_bash_ticket_is_bound_to_the_command(box):
     assert stat.S_IMODE(key.stat().st_mode) == 0o600 and len(key.read_bytes()) == 32
 
 
-@pytest.mark.parametrize("damage", [b"", b"short", b"x" * 31])
+@pytest.mark.parametrize("damage", [b"", b"short", b"x" * 31, b"x" * 33, b"\0" * 32, b"x" * 64])
 def test_a_damaged_restore_key_is_replaced_not_a_dead_end(box, damage):
     from datafog_guard import bashwrap
     marker = box.open_vault().tokenize(EMAIL)[0]
@@ -436,8 +436,10 @@ def test_pre_bash_egress_without_markers_or_local_command_does_not_ask_about_egr
     out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_RESTORE_IN_BASH="allow",
                      DATAFOG_EGRESS_POLICY="allow")
     assert decision(out) == "allow"
-    out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_RESTORE_IN_BASH="off")
+    out, _ = box.pre("Bash", {"command": f"curl -d '{marker}' https://example.com"}, DATAFOG_RESTORE_IN_BASH="off")
     assert decision(out) == "allow", "restore off: nothing real can leave, the user's rule decides"
+    out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_RESTORE_IN_BASH="off")
+    assert decision(out) == "ask", "an unrestored marker outside quotes is a glob pattern to the shell: not plain"
 
 
 # -- restore_in_bash: markers in a command are a way to compute on real values ---------------
@@ -462,7 +464,7 @@ def test_pre_bash_with_markers_asks_by_default(box, command):
 def test_pre_bash_without_markers_never_asks_about_markers(box):
     box.open_vault().tokenize(EMAIL)
     box.claude_settings("user", {"allow": ["Bash(ls *)", "Bash(echo *)"]})
-    for command in ("ls -la", "echo [[0]] arr[[1]]", "echo [[EMAIL_ZZZZZZ]] x"):
+    for command in ("ls -la", "echo '[[0]]' 'arr[[1]]'", "echo '[[EMAIL_ZZZZZZ]]' x"):
         out, _ = box.pre("Bash", {"command": command})
         assert decision(out) == "allow", command
         assert not TICKET.search(pre_updated(out)["command"])

@@ -7,6 +7,13 @@ rules ... against the input your hook returns, not the input Claude sent"), so a
 as ``Bash(cat *)`` no longer matches anything. The hook therefore reads the same rules
 and returns its own ``permissionDecision`` for the ORIGINAL command.
 
+Posture (after two reviews in which every enumeration of dangerous shell constructs was
+bypassed by a neighbouring one): a command is first classified PLAIN or NOT PLAIN by the one
+strict recogniser in plain.py. Only a plain command is split into sub-commands, has its
+paths checked and can be approved by an allow rule. A command that is not plain is never
+approved, and never left undecided, while any deny or ask rule exists: what the plugin finds
+in it by scanning can deny it, and finding nothing proves nothing.
+
 The one rule for everything in this file: never more permissive than Claude Code would
 be. Where the documentation is silent or ambiguous the stricter reading is used; each such
 choice is marked STRICTER below and listed in the README. Extra prompts are acceptable;
@@ -53,6 +60,8 @@ import json
 import os
 import re
 import sys
+
+from . import plain as grammar
 
 BASH_PARAMS = ("description", "timeout", "run_in_background", "dangerouslyDisableSandbox")
 MODES = ("default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions")
@@ -154,11 +163,21 @@ def parse_rule(entry, kind: str, source: str) -> Rule | None:
     return Rule(kind, spec, source)
 
 
-CASE_INSENSITIVE = sys.platform == "darwin"       # the default macOS filesystem ignores case
+CASE_INSENSITIVE = sys.platform == "darwin"       # the default macOS filesystem ignores case and Unicode form
+MAX_PATH_LENGTH = 1024
+MAX_PATH_SEGMENTS = 64
 
 
-def _glob_regex(pattern: str) -> re.Pattern | None:
-    """A gitignore-style pattern as a regular expression over a /-separated relative path.
+def _fold(text: str) -> str:
+    """Paths and patterns as the filesystem compares them: NFC and case-folded on macOS."""
+    if not CASE_INSENSITIVE:
+        return text
+    import unicodedata
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def _glob_source(pattern: str) -> str | None:
+    """A gitignore-style pattern as regular-expression source over a /-separated relative path.
     ``*`` and ``?`` stay inside one segment, ``**`` crosses directories, ``[...]`` is a class."""
     out, i, n = [], 0, len(pattern)
     while i < n:
@@ -192,10 +211,12 @@ def _glob_regex(pattern: str) -> re.Pattern | None:
         else:
             out.append(re.escape(char))
             i += 1
+    source = "".join(out)
     try:
-        return re.compile("".join(out), re.DOTALL | (re.IGNORECASE if CASE_INSENSITIVE else 0))
+        re.compile(source)
     except re.error:
         return None
+    return source
 
 
 class PathRule:
@@ -213,47 +234,70 @@ class PathRule:
       * relative patterns are tried against the hook's cwd and against the project directory;
       * ``/path`` in managed settings (anchor not documented) is tried at the project directory
         and at the filesystem root;
-      * a bare ``Read`` or ``Edit`` rule (the whole tool) covers every path.
+      * a bare ``Read`` or ``Edit`` rule (the whole tool) covers every path;
+      * a pattern that names only its anchor (``~/``, ``//``, ``.``, ``./``) covers the anchor and
+        everything below it; empty and ``.`` segments are dropped (``a//b``, ``a/./b``);
+      * a pattern with a ``..`` segment is UNSUPPORTED: the plugin cannot say what it covers, so
+        while such a rule exists no Bash command is approved without a prompt.
     """
-    __slots__ = ("tool", "kind", "source", "anchors", "relative", "pattern", "regex", "everything", "real")
+    __slots__ = ("tool", "kind", "source", "anchors", "relative", "pattern", "everything", "unsupported",
+                 "written", "_real", "_compiled")
 
     def __init__(self, tool: str, kind: str, pattern: str | None, source: str, source_dirs: list[str]):
         self.tool, self.kind, self.source = tool, kind, source
+        self.written = pattern or ""
         self.everything = pattern is None or pattern.strip() in ("", "*", "**")
         pattern = (pattern or "").strip()
         self.relative = False
         home = os.path.expanduser("~")
         if pattern.startswith("//"):
             self.anchors, pattern = ["/"], pattern[2:]
-        elif pattern.startswith("~/"):
+        elif pattern == "~" or pattern.startswith("~/"):
             self.anchors, pattern = [home], pattern[2:]
         elif pattern.startswith("/"):
             self.anchors, pattern = list(source_dirs), pattern[1:]
         else:
             self.relative, self.anchors = True, []
-            while pattern.startswith("./"):
-                pattern = pattern[2:]
-        self.pattern = pattern.rstrip("/")
-        self.regex = _glob_regex(self.pattern)
+        parts = [part for part in pattern.split("/") if part not in ("", ".")]
+        self.unsupported = ".." in parts or "\x00" in pattern or len(pattern) > MAX_PATH_LENGTH
+        self.pattern = "/".join(parts)          # "" means: the anchor itself and everything below it
+        self._compiled: dict = {}
         # "a deny or ask rule written through a symlinked directory with a //, ~/, or / pattern also
         # applies at the directory's real location": the literal leading part of the pattern is resolved.
-        self.real: list[tuple[str, str, re.Pattern | None]] = []
-        if not self.relative and not self.everything:
-            parts = self.pattern.split("/")
+        self._real: list[tuple[str, str]] = []
+        if not self.relative and not self.everything and not self.unsupported:
             literal = 0
             while literal < len(parts) and not any(char in parts[literal] for char in "*?[\\"):
                 literal += 1
             for anchor in self.anchors:
                 folder = os.path.normpath(os.path.join(anchor, *parts[:literal]))
-                real = os.path.realpath(folder)
+                try:
+                    real = os.path.realpath(folder)
+                except (OSError, ValueError):
+                    continue
                 if literal and real != folder:
-                    rest = "/".join(parts[literal:])
-                    self.real.append((real, rest, _glob_regex(rest) if rest else None))
+                    self._real.append((real, "/".join(parts[literal:])))
+
+    def _regex(self, pattern: str, any_depth: bool):
+        """One expression for "this relative path, or a directory above it, matches"."""
+        key = (pattern, any_depth, CASE_INSENSITIVE)
+        if key not in self._compiled:
+            source = _glob_source(_fold(pattern))
+            if source is None:                                   # "still guards that exact path"
+                source = re.escape(_fold(pattern))
+            self._compiled[key] = re.compile(("(?:.*/)?" if any_depth else "") + "(?:" + source + ")(?:/.*)?",
+                                             re.DOTALL)
+        return self._compiled[key]
 
     def _anchors(self, cwds: list[str]) -> list[str]:
         found = []
         for anchor in (cwds if self.relative else self.anchors):
-            for folder in (anchor, os.path.realpath(anchor)):
+            candidates = [anchor]
+            try:
+                candidates.append(os.path.realpath(anchor))
+            except (OSError, ValueError):
+                pass
+            for folder in candidates:
                 folder = os.path.normpath(folder)
                 if folder not in found:
                     found.append(folder)
@@ -263,36 +307,30 @@ class PathRule:
         """``path`` is absolute and normalised. A rule that matches a directory covers what is in it."""
         if self.everything:
             return True
-        fold = (lambda text: text.lower()) if CASE_INSENSITIVE else (lambda text: text)
-        for anchor in self._anchors(cwds):
+        if self.unsupported:
+            return False
+        path = _fold(path)
+        places = [(anchor, self.pattern, self.relative) for anchor in self._anchors(cwds)]
+        places += [(folder, rest, False) for folder, rest in self._real]
+        for anchor, pattern, any_depth in places:
+            anchor = _fold(anchor)
             prefix = anchor.rstrip("/") + "/"
-            if not fold(path).startswith(fold(prefix)):
-                continue
-            parts = path[len(prefix):].split("/")
-            starts = range(len(parts)) if self.relative else (0,)
-            for start in starts:
-                for end in range(start + 1, len(parts) + 1):
-                    piece = "/".join(parts[start:end])
-                    if (self.regex.fullmatch(piece) if self.regex else fold(piece) == fold(self.pattern)):
-                        return True
-        for folder, rest, regex in self.real:
-            if fold(path) == fold(folder):
-                return True
-            prefix = folder.rstrip("/") + "/"
-            if fold(path).startswith(fold(prefix)):
-                parts = path[len(prefix):].split("/")
-                if not rest or any(regex is not None and regex.fullmatch("/".join(parts[:end]))
-                                   for end in range(1, len(parts) + 1)):
+            if not pattern:
+                if path == anchor or path.startswith(prefix):
                     return True
+                continue
+            if path.startswith(prefix) and self._regex(pattern, any_depth).fullmatch(path[len(prefix):]):
+                return True
         return False
 
     def may_cover_inside(self, folder: str, cwds: list[str]) -> bool:
         """Whether the rule could match something below ``folder`` (or ``folder`` lies in its reach)."""
-        if self.everything:
+        if self.everything or self.unsupported:
             return True
-        for anchor in self._anchors(cwds):
-            if anchor == folder or anchor.startswith(folder.rstrip("/") + "/") or \
-                    folder.startswith(anchor.rstrip("/") + "/"):
+        folder = _fold(folder).rstrip("/") + "/"
+        for anchor in self._anchors(cwds) + [real for real, _ in self._real]:
+            anchor = _fold(anchor).rstrip("/") + "/"
+            if anchor.startswith(folder) or folder.startswith(anchor):
                 return True
         return False
 
@@ -895,63 +933,19 @@ def first_rule(rules: list[Rule], split: Split, command: str, tool_input: dict |
     return None
 
 
-_SIMPLE_VARIABLE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
-
-
-def is_simple(command: str) -> bool:
+def is_simple(command: str, markers=()) -> bool:
     """Whether an allow rule may be applied to this command. Deliberately strict; loosen it here.
 
-    SIMPLE means exactly one command:
-      * no ``;``, ``&&``, ``||``, ``|``, ``&``            (lists, pipelines, background)
-      * no ``<`` or ``>``                                   (redirections, heredocs, process substitution)
-      * no ``(`` or ``)``, no ``$(``, no backtick           (subshells, command substitution)
-      * no ``{`` or ``}`` outside quotes                    (groups, brace expansion)
-      * no newline or carriage return, anywhere
-      * no leading ``NAME=value``, no reserved word as the command (``if``, ``for``, ``time``, ``!`` ...)
-      * no backslash outside single quotes, no ``$'...'``, no comment
-      * ``$`` only as ``$NAME`` or ``${NAME}``
-      * balanced quotes, at most 10,000 characters
-    Inside single quotes every character except a newline is allowed; inside double quotes
-    everything except ``$(``, backtick, backslash and newline.
+    SIMPLE means: PLAIN (plain.py: literal words only, no expansion of any kind), and
+      * exactly one command: no ``|``, ``&&``, ``||``, ``;``;
+      * no redirection;
+      * no newline anywhere, not even inside quotes;
+      * at most 10,000 characters.
     """
-    text = command.strip()
-    if not text or len(command) > 10_000 or "\n" in command or "\r" in command or "\x00" in command:
+    if len(command) > 10_000 or "\n" in command:
         return False
-    i, n = 0, len(text)
-    quote = ""
-    word_start = True
-    while i < n:
-        char = text[i]
-        if quote == "'":
-            if char == "'":
-                quote = ""
-        elif char == "`" or char == "\\":
-            return False
-        elif char == "$":
-            match = _SIMPLE_VARIABLE.match(text, i)
-            if not match:
-                return False
-            i = match.end()
-            word_start = False
-            continue
-        elif quote == '"':
-            if char == '"':
-                quote = ""
-        elif char in "'\"":
-            quote = char
-        elif char in ";&|<>(){}":
-            return False
-        elif char == "#" and word_start:
-            return False
-        word_start = not quote and char in " \t"
-        i += 1
-    if quote:
-        return False
-    words = _words(text)
-    if not words:
-        return False
-    first_raw, first = words[0]
-    return not (_ASSIGNMENT.match(first_raw) or first in RESERVED)
+    parsed = grammar.recognise(command.strip(), markers)
+    return parsed is not None and len(parsed.commands) == 1 and not parsed.commands[0].redirected
 
 
 def allow_rule_for(rules: RuleSet, command: str, exact_only: bool = False) -> Rule | None:
@@ -1014,8 +1008,11 @@ def rm_needs_review(split: Split, cwd: str) -> bool:
 # Read and Edit rules applied to a Bash command
 # ---------------------------------------------------------------------------
 _PIECES = re.compile(r"[\s=:,;|&<>()'\"@]+")
-_DYNAMIC = re.compile(r"[$`*?\[\]{}]|^~[^/]")
+_SUFFIXES = re.compile(r"[=:,@]")
+_LOOSE = re.compile(r"[\s;|&<>()`$]+")
 WALK_LIMIT = 3000
+MAX_BASES = 8
+MAX_LOOSE_TOKENS = 3000
 
 
 class PathFinding:
@@ -1025,29 +1022,51 @@ class PathFinding:
         self.unsure = ""                       # why a path rule may apply although no named path matches
 
 
-def check_paths(rules: RuleSet, split: Split, cwd: str, project_dir: str = "",
+def _texts_of(text: str) -> list[str]:
+    """What in one word may be a path: the word, what follows ``=`` ``:`` ``,`` ``@`` in it, and every
+    tail of a short-option cluster (``-fPATH``, ``-hfPATH``, ``-nfPATH``)."""
+    found = [text]
+    for match in _SUFFIXES.finditer(text):
+        found.append(text[match.end():])
+    if text.startswith("-") and not text.startswith("--"):
+        found.extend(text[index:] for index in range(2, min(len(text), 66)))
+    return [item for item in dict.fromkeys(found) if item and item != "-"]
+
+
+def _rule_for(rules: RuleSet, paths: list[str], kind: str, cwds: list[str]) -> PathRule | None:
+    for rule in rules.paths:
+        if rule.kind == kind and any(rule.matches(path, cwds) for path in paths):
+            return rule
+    return None
+
+
+def check_paths(rules: RuleSet, parsed: grammar.Plain, cwd: str, project_dir: str = "",
                 marker_values: dict[str, str] | None = None) -> PathFinding:
-    """Apply the user's Read and Edit deny and ask rules to what a Bash command names.
+    """Apply the user's Read and Edit deny and ask rules to what a PLAIN Bash command names.
 
     permissions, Read and Edit: the rules "apply to ... file commands Claude Code recognizes in Bash,
     such as cat, head, tail, sed, and tee, and to the targets of Bash redirections". Claude Code only
     sees the rewritten command, so the plugin has to do this.
 
-    STRICTER than the documentation, which limits it to recognised file commands:
-      * every word of every sub-command (nested ones too) is treated as a possible path, and so is
-        every redirection target, the part after ``=`` or ``:`` in a word, and a path after ``@``;
-      * each is checked as written and with symbolic links resolved, against Read and Edit rules
-        alike (whether a program reads or writes its operand is not known);
-      * a path that is only mentioned inside a quoted argument (an inline script, a message) asks;
-      * a word that is not known before the command runs (a variable, a substitution, a glob, a brace
-        expansion, ``~user``), a ``cd`` in a compound command, and a directory operand that holds or
-        may hold a covered path all ask, in every mode including bypassPermissions;
-      * globs are also expanded on disk and each result is checked.
+    The command is plain (plain.py), so every word is literal text: nothing in it expands. For each
+    word and redirection target, and for what follows ``=`` ``:`` ``,`` ``@`` in it and every tail of
+    a short-option cluster:
+      * it is taken as a path relative to the working directory AND to every existing directory
+        the command names (``tar -C sub``, ``git -C``, ``--directory=``, ``env --chdir``: whatever the
+        option is called, the program can only change into a directory that is named);
+      * it is checked twice: resolved by the filesystem (symbolic links first, then ``..``, as the
+        kernel does) and normalised as text;
+      * against Read and Edit rules alike (whether a program reads or writes it is not known).
+    A named directory that holds a covered path, or is too large to look through, and a covered
+    path that is only mentioned inside a quoted argument (an inline script, a message) make the
+    result "unsure": the caller asks, in every mode.
+
+    STRICTER than the documentation, which limits all this to recognised file commands.
+    Not covered, as in Claude Code: a command that reads files without naming them, and what a
+    program opens on its own.
+
     ``marker_values`` maps the known markers in the command to their real values: a value may itself
     be a path, so words are checked with the values in place. They are used here and nowhere else.
-
-    Not covered, as in Claude Code: a command that reads files without naming them (``grep -r x``
-    with no path, ``git grep``), and what a program opens on its own.
     """
     finding = PathFinding()
     if not rules.paths:
@@ -1055,86 +1074,112 @@ def check_paths(rules: RuleSet, split: Split, cwd: str, project_dir: str = "",
     cwd = os.path.normpath(cwd or os.getcwd())
     cwds = [cwd] + ([os.path.normpath(project_dir)] if project_dir and os.path.normpath(project_dir) != cwd else [])
     home = os.path.expanduser("~")
+    direct: list[str] = []
+    mentioned: list[str] = []
+    for simple in parsed.commands:
+        for word in simple.words + [target for _, target in simple.targets]:
+            text = word.text
+            for marker, value in (marker_values or {}).items():
+                text = text.replace(marker, value)
+            direct.extend(_texts_of(text))
+            if not word.bare and any(char in text for char in " \t\n;|&()'\""):
+                for piece in _PIECES.split(text):
+                    mentioned.extend(_texts_of(piece) if piece else [])
+    direct = list(dict.fromkeys(direct))
+    mentioned = [text for text in dict.fromkeys(mentioned) if text not in direct]
 
-    def resolved(text: str) -> list[str]:
+    def too_long(text: str) -> bool:
+        return len(text) > MAX_PATH_LENGTH or text.count("/") > MAX_PATH_SEGMENTS or "\x00" in text
+
+    def resolved(text: str, bases: list[str]) -> list[str]:
         if text == "~" or text.startswith("~/"):
             text = home + text[1:]
-        path = os.path.normpath(os.path.join(cwd, text))
-        return [path] if os.path.realpath(path) == path else [path, os.path.realpath(path)]
+        found = []
+        for base in bases:
+            joined = text if text.startswith("/") else base.rstrip("/") + "/" + text
+            candidates = [os.path.normpath(joined)]
+            try:
+                candidates.append(os.path.realpath(joined))      # symbolic links first, then "..", like the kernel
+            except (OSError, ValueError):
+                pass
+            for path in candidates:
+                if path not in found:
+                    found.append(path)
+        return found
 
-    def rule_for(paths: list[str], kind: str) -> PathRule | None:
-        for rule in rules.paths:
-            if rule.kind == kind and any(rule.matches(path, cwds) for path in paths):
-                return rule
-        return None
-
-    def directory(paths: list[str]) -> None:
-        folder = paths[-1]
-        if finding.unsure or not os.path.isdir(folder):
-            return
-        if not any(rule.may_cover_inside(folder, cwds) for rule in rules.paths):
-            return
-        seen = 0
-        for base, folders, names in os.walk(folder):
-            for name in folders + names:
-                seen += 1
-                if seen > WALK_LIMIT:
-                    finding.unsure = "a directory it names is too large to check against your Read and Edit rules"
-                    return
-                inside = os.path.join(base, name)
-                if rule_for([inside], "deny") or rule_for([inside], "ask"):
-                    finding.unsure = "a Read or Edit rule covers something inside a directory it names"
-                    return
-
-    moves = len(split.commands) > 1 and any(
-        (_words(sub) or [("", "")])[0][1] in ("cd", "pushd", "popd", "chdir") for sub in split.commands)
-    if moves:
-        finding.unsure = "it changes directory, so relative paths cannot be checked against your Read and Edit rules"
-    if not split.certain:
-        finding.unsure = "it could not be parsed with certainty, so its paths cannot be checked"
-    for sub in split.commands:
-        for raw, plain in _words(sub, keep_redirects=True):
-            if not plain or plain == "-":
+    # every existing directory the command names is a place a relative path may be meant from
+    bases = [cwd]
+    for _ in range(2):
+        for text in direct:
+            if too_long(text) or len(bases) >= MAX_BASES:
                 continue
-            literal = len(raw) > 1 and raw[0] == "'" == raw[-1] and raw.count("'") == 2     # '...': nothing expands
-            for marker, value in (marker_values or {}).items():
-                if marker in plain:
-                    plain = plain.replace(marker, value)
-                    literal = True                           # a restored value is inert text, never a pattern
-            quoted_text = (raw != plain) and any(char in plain for char in " \t\n;|&()")
-            texts = [plain]
-            for piece in _PIECES.split(plain):
-                if piece and piece not in texts:
-                    texts.append(piece)
-            if plain.startswith("-") and len(plain) > 2 and not plain.startswith("--"):
-                texts.append(plain[2:])                      # -fPATH
-            for index, text in enumerate(texts):
-                dynamic = not literal and bool(_DYNAMIC.search(text)) and \
-                    (raw == plain or "$" in text or "`" in text)
-                if dynamic:
-                    finding.unsure = finding.unsure or ("it names a file through a variable, a substitution or a "
-                                                        "pattern, which cannot be checked against your Read and "
-                                                        "Edit rules before it runs")
-                    if any(char in text for char in "*?[") and not any(char in text for char in "$`"):
-                        import glob
-                        try:
-                            hits = glob.glob(os.path.join(cwd, os.path.expanduser(text)), recursive=True)
-                        except (OSError, re.error, ValueError):
-                            hits = []
-                        for hit in hits[:WALK_LIMIT]:
-                            paths = resolved(hit)
-                            finding.deny = finding.deny or rule_for(paths, "deny")
-                            finding.ask = finding.ask or rule_for(paths, "ask")
+            for path in resolved(text, list(bases)):
+                if path not in bases and len(bases) < MAX_BASES and os.path.isdir(path):
+                    bases.append(path)
+
+    walked = 0
+    for text in direct:
+        if too_long(text):
+            finding.unsure = finding.unsure or "it names a path too long to check against your Read and Edit rules"
+            continue
+        paths = resolved(text, bases)
+        finding.deny = finding.deny or _rule_for(rules, paths, "deny", cwds)
+        finding.ask = finding.ask or _rule_for(rules, paths, "ask", cwds)
+        for folder in paths:
+            if finding.unsure or finding.deny or not os.path.isdir(folder):
+                continue
+            if not any(rule.may_cover_inside(folder, cwds) for rule in rules.paths):
+                continue
+            for base, folders, names in os.walk(folder):
+                for name in folders + names:
+                    walked += 1
+                    inside = os.path.join(base, name)
+                    if walked > WALK_LIMIT:
+                        finding.unsure = "a directory it names is too large to check against your Read and Edit rules"
+                    elif _rule_for(rules, [inside], "deny", cwds) or _rule_for(rules, [inside], "ask", cwds):
+                        finding.unsure = "a Read or Edit rule covers something inside a directory it names"
+                    if finding.unsure:
+                        break
+                if finding.unsure:
+                    break
+    for text in mentioned:
+        if finding.unsure:
+            break
+        if too_long(text):
+            continue
+        paths = resolved(text, bases)
+        if _rule_for(rules, paths, "deny", cwds) or _rule_for(rules, paths, "ask", cwds):
+            finding.unsure = "a path covered by a Read or Edit rule is mentioned in it"
+    return finding
+
+
+def scan_paths(rules: RuleSet, command: str, cwd: str, project_dir: str = "") -> PathFinding:
+    """Best effort for a command that is NOT plain: look for covered paths in its text.
+
+    A hit denies or asks. No hit proves nothing: the caller never approves such a command without
+    a prompt while any rule exists. Text only, bounded, no filesystem access.
+    """
+    finding = PathFinding()
+    if not rules.paths:
+        return finding
+    cwd = os.path.normpath(cwd or os.getcwd())
+    cwds = [cwd] + ([os.path.normpath(project_dir)] if project_dir and os.path.normpath(project_dir) != cwd else [])
+    home = os.path.expanduser("~")
+    text = command[:grammar.MAX_LENGTH].replace("\\\n", "").replace("\x00", "")
+    seen = 0
+    for token in _LOOSE.split(text):
+        for variant in dict.fromkeys((token, token.replace("'", "").replace('"', "").replace("\\", ""))):
+            for piece in _texts_of(variant):
+                seen += 1
+                if seen > MAX_LOOSE_TOKENS:
+                    return finding
+                if len(piece) > MAX_PATH_LENGTH or piece.count("/") > MAX_PATH_SEGMENTS:
                     continue
-                paths = resolved(text)
-                deny, ask = rule_for(paths, "deny"), rule_for(paths, "ask")
-                if quoted_text and index > 0:
-                    if deny or ask:                          # only mentioned inside a longer quoted argument
-                        finding.unsure = finding.unsure or "a path covered by a Read or Edit rule is mentioned in it"
-                    continue
-                finding.deny = finding.deny or deny
-                finding.ask = finding.ask or ask
-                directory(paths)
+                if piece == "~" or piece.startswith("~/"):
+                    piece = home + piece[1:]
+                paths = [os.path.normpath(piece if piece.startswith("/") else cwd + "/" + piece)]
+                finding.deny = finding.deny or _rule_for(rules, paths, "deny", cwds)
+                finding.ask = finding.ask or _rule_for(rules, paths, "ask", cwds)
     return finding
 
 
@@ -1160,7 +1205,7 @@ def decide(command: str, rules: RuleSet, *, mode: str = "default", markers: str 
       3. an ask rule matches         -> ask
       4. known markers, restore=ask  -> ask
       5. markers and data may leave  -> ask
-      6. not a SIMPLE command        -> ask
+      6. not PLAIN, or not SIMPLE    -> ask   (not PLAIN: firm while any deny or ask rule exists)
       7. an allow rule matches       -> allow
       8. otherwise                   -> ask
 
@@ -1173,13 +1218,29 @@ def decide(command: str, rules: RuleSet, *, mode: str = "default", markers: str 
     """
     if mode not in MODES:
         mode = "default"                           # an unknown mode is treated as the strictest interactive one
-    split = split_commands(command)
+    spans = []
+    for marker in (marker_values or {}):
+        start = command.find(marker)
+        while marker and start >= 0:
+            spans.append((start, start + len(marker)))
+            start = command.find(marker, start + len(marker))
+    # ONE question first: is the command PLAIN (plain.py)? Only then is it known what it consists of.
+    parsed = grammar.recognise(command.strip(), [(start - (len(command) - len(command.lstrip())), end -
+                                                (len(command) - len(command.lstrip()))) for start, end in spans])
+    if parsed is not None:
+        split = Split()
+        split.commands = [parsed.source(simple) for simple in parsed.commands]
+        paths = check_paths(rules, parsed, cwd, project_dir, marker_values)
+    else:
+        # Not plain: nothing below is proof. Sub-commands and paths are looked for on a best-effort
+        # basis so that a deny or ask rule that visibly applies still does; finding nothing means nothing.
+        split = loose_split(command)
+        paths = scan_paths(rules, command, cwd, project_dir)
 
     rule = first_rule(rules.deny, split, command, tool_input)
     if rule:
         return Decision("deny", f"DataFog: a Bash deny rule in your Claude Code {rule.source} matches this command "
                                 "(or a part of it), so it was refused.", 2, rule)
-    paths = check_paths(rules, split, cwd, project_dir, marker_values)
     if paths.deny:
         return Decision("deny", f"DataFog: a {paths.deny.tool} deny rule in your Claude Code {paths.deny.source} "
                                 "covers a path this command names, so it was refused.", 2)
@@ -1196,23 +1257,6 @@ def decide(command: str, rules: RuleSet, *, mode: str = "default", markers: str 
     if paths.ask:
         return ask(3, f"DataFog: a {paths.ask.tool} ask rule in your Claude Code {paths.ask.source} covers a path "
                       "this command names.", firm=True)
-
-    # Checks Claude Code makes itself in every mode and cannot make inside the rewritten command.
-    if paths.unsure:
-        firm = (f"DataFog: you have Read or Edit deny or ask rules, and this command cannot be cleared against "
-                f"them: {paths.unsure}. It is not approved without a prompt.")
-    elif rules.block_outside_reads:
-        firm = ("DataFog: permissions.blockReadsOutsideWorkingDirectories is on and the plugin cannot check which "
-                "files a command reads, so it is not approved without a prompt.")
-    elif rm_needs_review(split, cwd):
-        firm = ("DataFog: Claude Code checks rm and rmdir targets itself, in every permission mode, and cannot do "
-                "that inside the plugin's wrapper, so this removal is not approved without a prompt.")
-    elif not split.certain:
-        firm = ("DataFog: the plugin could not parse this command with certainty, so it is not approved without "
-                "a prompt.")
-    else:
-        firm = ""
-
     rule = first_rule(rules.ask, split, command, tool_input)
     if rule:
         return ask(3, f"DataFog: a Bash ask rule in your Claude Code {rule.source} matches this command "
@@ -1230,11 +1274,39 @@ def decide(command: str, rules: RuleSet, *, mode: str = "default", markers: str 
     if markers and egress:
         return ask(5, f"DataFog: this command would run with real values ({markers}) and looks like it sends data "
                       "to another machine.")
+    unsupported = [rule for rule in rules.paths if rule.unsupported]
+    if parsed is None:
+        # Never allow, never "no decision" while a rule exists the plugin could be misreading the command
+        # around: the ask is then firm (it stays an ask in bypassPermissions and auto, a deny in dontAsk).
+        restrictive = bool(rules.deny or rules.ask or rules.paths or rules.block_outside_reads
+                           or rm_needs_review(split, cwd))
+        return ask(6, "DataFog: this is not a plain command (it has a variable, a substitution, a pattern, an "
+                      "escape, a heredoc, a group, a loop, an assignment, a shell builtin or the like), so the "
+                      "plugin cannot tell with certainty what it runs or which files it names. Your Bash allow "
+                      "rules were not applied" + (", and because you have deny or ask rules it is not approved "
+                                                  "without a prompt in any permission mode." if restrictive else "."),
+                   firm=restrictive)
+    # Checks Claude Code makes itself in every mode and cannot make inside the rewritten command.
+    firm = ""
+    if unsupported:
+        firm = ("DataFog: a Read or Edit rule in your Claude Code " + unsupported[0].source + " has a pattern the "
+                "plugin cannot interpret (it contains ..), so no Bash command is approved without a prompt until "
+                "that rule is rewritten. /datafog:doctor lists such rules.")
+    elif paths.unsure:
+        firm = (f"DataFog: you have Read or Edit deny or ask rules, and this command cannot be cleared against "
+                f"them: {paths.unsure}. It is not approved without a prompt.")
+    elif rules.block_outside_reads:
+        firm = ("DataFog: permissions.blockReadsOutsideWorkingDirectories is on and the plugin cannot check which "
+                "files a command reads, so it is not approved without a prompt.")
+    elif rm_needs_review(split, cwd):
+        firm = ("DataFog: Claude Code checks rm and rmdir targets itself, in every permission mode, and cannot do "
+                "that inside the plugin's wrapper, so this removal is not approved without a prompt.")
     if firm:
-        return ask(6 if not split.certain else 8, firm, firm=True)
-    if not is_simple(command):
-        return ask(6, "DataFog: this is not a single simple command (it has a pipe, a list, a redirection, a "
-                      "substitution, a group or more than one line), so your Bash allow rules were not applied.")
+        return ask(8, firm, firm=True)
+    if not is_simple(command, [(start - (len(command) - len(command.lstrip())), end -
+                                (len(command) - len(command.lstrip()))) for start, end in spans]):
+        return ask(6, "DataFog: this is more than one simple command (it has a pipe, a list, a redirection or more "
+                      "than one line), so your Bash allow rules were not applied.")
     if not rules.allow_usable:
         return ask(8, "DataFog: a Claude Code settings file could not be read (" + ", ".join(rules.problems)
                    + "), so no Bash allow rule was applied.")
@@ -1246,6 +1318,20 @@ def decide(command: str, rules: RuleSet, *, mode: str = "default", markers: str 
                                   7, rule), mode, rules, wrapped)
     return ask(8, "DataFog: no Bash allow rule in the Claude Code settings files the plugin can read matches "
                   "this command.")
+
+
+def loose_split(command: str) -> Split:
+    """Sub-commands of a command that is not plain, for deny and ask rules only: the tolerant scan AND a
+    crude cut at every operator with quotes ignored. Uncertain by definition."""
+    text = command[:grammar.MAX_LENGTH].replace("\x00", "")
+    split = split_commands(text)
+    split.certain = False
+    for source in (text, text.replace("\\\n", "")):
+        for piece in re.split(r"[;&|\n(){}`]+|\$\(", source)[:MAX_LOOSE_TOKENS]:
+            piece = piece.strip()
+            if piece and piece not in split.commands:
+                split.commands.append(piece)
+    return split
 
 
 def _wrapper_is_allowed(rules: RuleSet, wrapped: str | None) -> bool:

@@ -101,9 +101,14 @@ def test_rule_parsing():
 
 # -- SIMPLE ------------------------------------------------------------------------------------------
 SIMPLE = ["ls", "ls -la src", "cat notes.txt", "grep -c 'a|b;c' file", 'git commit -m "fix (scope): x; y"',
-          "echo [[EMAIL_7KQ4ZM]]", "cat $HOME/x", 'echo "${HOME}/x"', "npm run test:unit", "ls *.ts", "wc -l src/*.py",
-          "  ls  ", "echo 'it'\"'\"'s'", "find . -name '*.{a,b}'", "echo ~/x", "/bin/ls -l", "git log --oneline -5"]
+          "npm run test:unit", "  ls  ", "echo 'it'\"'\"'s'", "find . -name '*.{a,b}'", "echo ~/x", "/bin/ls -l",
+          "git log --oneline -5", "awk '{print $1}' f", "grep 'a\\.b' f", "cat ~", "tool --opt=a,b:c@d%e+f",
+          "cd sub", "kill 123", "test -f x"]
 NOT_SIMPLE = [
+    "echo [[EMAIL_7KQ4ZM]]", "cat $HOME/x", 'echo "${HOME}/x"', "ls *.ts", "wc -l src/*.py", "ls ?", "ls [ab]",
+    "cat ~root/x", "cat ~+", "echo a{1,2}", "echo =ls", "echo !x", "echo a^b", "echo 'multi\nline'",
+    "export A=1", "set -e", "eval ls", "source x", ". x", "exec ls", "command ls", "builtin echo", "alias a=b",
+    "read x", "unset x", "trap x EXIT", "cd x && ls", "cd x > log", "ls 2>&1",
     "", "   ", "ls; pwd", "ls && pwd", "ls || pwd", "ls | wc", "ls &", "ls |& cat", "sleep 1 & wait",
     "ls > out", "ls >> out", "cat < in", "ls 2>&1", "ls 2>/dev/null", "ls &> out", "cat <<EOF\nx\nEOF", "cat <<< x",
     "(ls)", "echo $(ls)", "echo `ls`", 'echo "$(ls)"', 'echo "`ls`"', "diff <(a) <(b)", "tee >(cat)",
@@ -212,7 +217,8 @@ def test_broad_allow_rules_cannot_approve_wrappers_or_quoted_names():
     """permissions, "Exec wrappers and find actions": a prefix rule can't approve them; an exact rule can."""
     broad = rules(allow=["Bash"])
     assert decide("ls -la", broad, cwd="/work/p").outcome == "allow"
-    for command in ("env ls", "sudo ls", "timeout 5 ls", "command ls", "nohup ls", "xargs ls", "watch ls", "sh x.sh",
+    assert decide("command ls", rules(allow=["Bash", "Bash(command ls)"]), cwd="/work/p").outcome == "ask"
+    for command in ("env ls", "sudo ls", "timeout 5 ls", "nohup ls", "xargs ls", "watch ls", "sh x.sh",
                     "'ls' -la", "find . -name x -delete", "find . -fprint out"):
         assert decide(command, broad, cwd="/work/p").outcome == "ask", command
         exact = rules(allow=[f"Bash({command})"])
@@ -239,7 +245,9 @@ def test_rm_is_only_allowed_for_plain_paths_below_the_working_directory(tmp_path
         assert decide(command, allow, cwd=cwd, mode="auto").outcome == "ask", command
     # hidden in a compound command, bypass mode still does not approve it
     assert decide("cd /tmp && rm -rf *", allow, cwd=cwd, mode="bypassPermissions").outcome == "ask"
-    assert decide("cd /tmp && rm -rf build", allow, cwd=cwd, mode="bypassPermissions").outcome == "allow"
+    # a cd in a compound command is not plain: where `build` is cannot be known, so it asks as well
+    assert decide("cd /tmp && rm -rf build", allow, cwd=cwd, mode="bypassPermissions").outcome == "ask"
+    assert decide("ls /tmp && rm -rf build", allow, cwd=cwd, mode="bypassPermissions").outcome == "allow"
 
 
 # -- the decision matrix ----------------------------------------------------------------------------
@@ -781,7 +789,7 @@ HIDDEN_READ = {
     "head -n1 secret.env": ("deny", "names the file"),
     "grep x secret.env": ("deny", "not one of the five documented commands; every word is a candidate path"),
     "cp secret.env out": ("deny", "names the file"),
-    "cat s*.env": ("deny", "the glob is expanded on disk and its result is covered"),
+    "cat s*.env": ("ask", "a glob: the command is not plain"),
     "cat $(echo secret.env)": ("deny", "the nested command names the file"),
     "F=secret.env; cat $F": ("deny", "the text after = is checked as a path"),
     "tar c .": ("ask", "a directory that holds a covered file"),
@@ -953,3 +961,216 @@ def test_hook_applies_read_deny_rules_to_bash_commands(box):
         assert outcome(box.pre("Bash", {"command": "cat secret.env"}, permission_mode=mode)[0])[0] == "deny", mode
     assert outcome(box.pre("Bash", {"command": "cat $F"}, permission_mode="bypassPermissions")[0])[0] == "ask"
     assert outcome(box.pre("Bash", {"command": "cat notes.txt"}, permission_mode="bypassPermissions")[0])[0] == "allow"
+
+
+# -- second review: every bypass found, in all six modes ------------------------------------------------
+# Posture: the command is first classified PLAIN or NOT PLAIN by one strict recogniser (plain.py).
+# NOT PLAIN is never allowed and never left undecided while any deny or ask rule exists.
+REVIEW_READ = {
+    # partly quoted globs and tilde
+    'cat "s"ecret.en*': "ask", "cat ''secret.e??": "ask", 'cat secret.en[v]""': "ask", 'cat ""*.env': "ask",
+    'cat ~root/.ssh/"id_rsa"': "ask", "cat s*.env": "ask", "cat secret.{env,txt}": "ask",
+    # heredocs and continuations the old splitter misread (a best-effort hit denies; no hit asks)
+    'cat <<E"O"F\nEOF\ncat secret.env\nEOF': "deny", "cat <<'E'OF\nEOF\ncat secret.env\nEOF": "deny",
+    "echo a <<A\\\nB\nAB\ncat secret.env\nA": "deny", "cat <<EOF\n$(cat secret.env)\nEOF": "deny",
+    "cat secret\\\n.env": "deny", "cat <<EOF\n$(cat s*.env)\nEOF": "ask",
+    # cd anywhere but as the single command
+    "if cd sub; then cat ../secret.env; fi": "ask", "builtin cd sub; cat ../secret.env": "ask",
+    "command cd sub; cat ../secret.env": "ask", "! cd sub; cat ../secret.env": "ask",
+    "time cd sub; cat ../secret.env": "ask", "X=1 cd sub; cat ../secret.env": "ask",
+    "while cd sub; do cat ../secret.env; done": "ask", "eval cd sub; cat ../secret.env": "ask",
+    "cd sub && cat ../secret.env": "ask", "pushd sub; cat ../secret.env": "ask", "cd sub\ncat ../secret.env": "ask",
+    # .. through a symbolic link to a directory
+    "cat {tmp}/lnk/../secret.env": "deny", "cat lnk/../secret.env": "deny",
+    # options that make a program change directory
+    "tar -C sub -cf - ../secret.env": "deny", "tar -Csub -cf - ../secret.env": "deny",
+    "make -C sub ../secret.env": "deny", "git -C sub show ../secret.env": "deny",
+    "env -C sub cat ../secret.env": "deny", "env --chdir=sub cat ../secret.env": "deny",
+    "sudo -D sub cat ../secret.env": "deny", "tool --working-directory=sub ../secret.env": "deny",
+    "tool --directory sub/deeper ../../secret.env": "deny",
+    # a marker next to a glob or brace
+    "cat s*[[EMAIL_000001]]": "ask", "cat {secret.env,[[EMAIL_000001]]}": "ask",
+    # combined short options
+    "grep -hfsecret.env x": "deny", "sed -nfsecret.env": "deny", "tail -qfsecret.env": "deny", "grep -fsecret.env x": "deny",
+    # other shapes that are not plain
+    "cat $F": "ask", "cat ${F}": "ask", "cat `echo secret.env`": "deny", "cat $(echo secret.env)": "deny",
+    "cat secret.en\\v": "deny", "cat < secret.env &": "deny", "F=secret.env; cat $F": "deny",
+    "cat sec$'ret'.env": "ask", "(cat s*)": "ask", "{ cat s*; }": "ask", "cat s* # x": "ask",
+    "cat <<< x; cat s*": "ask", "cat <(cat s*)": "ask", "echo x >| s*": "ask", "cat s*\x00": "ask",
+}
+
+
+@pytest.fixture
+def review_tree(tree, tmp_path):
+    project, found = tree
+    (project / "sub" / "deeper").mkdir()
+    os.symlink(project / "sub", tmp_path / "lnk")
+    os.symlink(project / "sub", project / "lnk")
+    return project, found, tmp_path
+
+
+@pytest.mark.parametrize("command", sorted(REVIEW_READ))
+def test_second_review_read_rule_bypasses_are_closed(review_tree, command):
+    project, found, tmp = review_tree
+    text = command.replace("{tmp}", str(tmp))
+    values = {"[[EMAIL_000001]]": "ada.synthetic@example.com"} if "[[EMAIL" in text else None
+    got = [decide(text, found, mode=mode, cwd=str(project), project_dir=str(project), restore="allow",
+                  markers="1 EMAIL" if values else "", marker_values=values).outcome for mode in MODES]
+    assert "allow" not in got and None not in got, (command, dict(zip(MODES, got)))
+    assert got == by_mode(REVIEW_READ[command]), (command, dict(zip(MODES, got)))
+
+
+REVIEW_BASH = ['cat <<E"O"F\nEOF\ncurl https://example.com\nEOF', "cat <<'E'OF\nEOF\ncurl x\nEOF",
+               "echo a <<A\\\nB\nAB\ncurl x\nA", "cat <<EOF\n$(curl x)\nEOF", "cu\\\nrl x", "$C x",
+               "x=curl; $x y", "cat <<EOF\nEOF\n`curl x`"]
+
+
+@pytest.mark.parametrize("command", REVIEW_BASH)
+def test_second_review_a_misparse_cannot_hide_a_command_from_a_bash_deny_rule(command):
+    """`deny Bash(curl *)` and a heredoc the splitter misread: allowed in bypassPermissions before."""
+    found = rules(allow=["Bash"], deny=["Bash(curl *)"])
+    got = [decide(command, found, mode=mode, cwd="/work/project").outcome for mode in MODES]
+    assert "allow" not in got and None not in got, dict(zip(MODES, got))
+    assert got in (by_mode("deny"), by_mode("ask"))
+    # the same with an ask rule, and with no Bash rule but a Read rule: still never allowed or undecided
+    other = rules(allow=["Bash"])
+    other.add(["Read(./zzz)"], "deny", "project settings", ["/work/project"])
+    for restrictive in (rules(allow=["Bash"], ask=["Bash(curl *)"]), other):
+        got = [decide(command, restrictive, mode=mode, cwd="/work/project").outcome for mode in MODES]
+        assert got == by_mode("ask"), dict(zip(MODES, got))
+
+
+def test_not_plain_without_any_restrictive_rule_keeps_the_mode_behaviour():
+    """With no deny or ask rule at all there is nothing to misread around: bypass allows, auto leaves it
+    to Claude Code, the others ask, as before."""
+    found = rules(allow=["Bash"])
+    got = [decide("ls *.py | head", found, mode=mode, cwd="/work/project").outcome for mode in MODES]
+    assert got == ["ask", "ask", "ask", None, "deny", "allow"]
+    for restrictive in (rules(allow=["Bash"], deny=["Bash(zzz)"]), rules(allow=["Bash"], ask=["Bash(zzz)"])):
+        got = [decide("ls *.py | head", restrictive, mode=mode, cwd="/work/project").outcome for mode in MODES]
+        assert got == by_mode("ask")
+    # a plain compound command is not affected by the rules being there
+    got = [decide("ls src | head", rules(allow=["Bash"], deny=["Bash(zzz)"]), mode=mode, cwd="/work/project").outcome
+           for mode in MODES]
+    assert got == ["ask", "ask", "ask", None, "deny", "allow"]
+
+
+def test_short_option_clusters_and_suffixes_are_checked(tree):
+    project, found = tree
+    for command in ("grep -fsecret.env x", "grep -hfsecret.env x", "tool -abcsecret.env", "tool --in=secret.env",
+                    "tool a:secret.env", "tool x,secret.env", "tool @secret.env", "tool --a=b=secret.env",
+                    "tool -I./secret.env", "tool -o=secret.env"):
+        assert decide(command, found, cwd=str(project), project_dir=str(project)).outcome == "deny", command
+    assert decide("tool -fnotes.txt --in=notes.txt", found, cwd=str(project), project_dir=str(project)).outcome == "allow"
+
+
+def test_relative_rules_also_anchor_at_the_project_directory(tree):
+    """The hook's cwd can be a subdirectory after `cd`; the rule was written for the project directory."""
+    project, _ = tree
+    found = RuleSet()
+    found.add(["Bash"], "allow", "user settings")
+    found.add(["Read(./sub/plain.txt)"], "deny", "project settings", [str(project)])
+    sub = str(project / "sub")
+    assert decide("cat plain.txt", found, cwd=sub, project_dir=str(project)).outcome == "deny"
+    assert decide("cat plain.txt", found, cwd=sub, project_dir="").outcome == "allow", \
+        "(without the project directory the relative rule is anchored at the cwd only, as documented)"
+
+
+def test_macos_compares_paths_without_case_and_unicode_form(tree, monkeypatch):
+    import unicodedata
+    project, _ = tree
+    monkeypatch.setattr(ccperms, "CASE_INSENSITIVE", True)
+    composed, decomposed = unicodedata.normalize("NFC", "résumé.env"), unicodedata.normalize("NFD", "résumé.env")
+    assert composed != decomposed
+    for written, used in ((composed, decomposed), (decomposed, composed), (composed, composed.upper())):
+        found = RuleSet()
+        found.add(["Bash"], "allow", "user settings")
+        found.add([f"Read(./{written})"], "deny", "project settings", [str(project)])
+        assert decide(f"cat '{used}'", found, cwd=str(project), project_dir=str(project)).outcome == "deny"
+    # a directory that holds the covered file, named in another case
+    (project / "Docs").mkdir()
+    (project / "Docs" / "secret.env").write_text("x")
+    found = RuleSet()
+    found.add([f"Read(/{str(project).upper()}/docs/secret.env)"], "deny", "project settings", [str(project)])
+    rule = found.paths[0]
+    assert rule.may_cover_inside(str(project / "Docs"), [str(project)])
+    assert rule.matches(str(project / "Docs" / "secret.env"), [str(project)])
+    monkeypatch.setattr(ccperms, "CASE_INSENSITIVE", False)
+    assert not rule.matches(str(project / "Docs" / "secret.env"), [str(project)])
+    monkeypatch.setattr(ccperms, "CASE_INSENSITIVE", True)
+    inside = path_rule("Read(/x/**)", source_dirs=[str(project / "DOCS")])       # anchored at .../DOCS
+    assert inside.may_cover_inside(str(project / "Docs"), [str(project)])
+    monkeypatch.setattr(ccperms, "CASE_INSENSITIVE", False)
+    assert not inside.may_cover_inside(str(project / "Docs"), [str(project)])
+
+
+ANCHOR_ONLY = [("Read(~/)", "{home}/x/y"), ("Read(~)", "{home}/x"), ("Read(//)", "/etc/hosts"), ("Read(.)", "{cwd}/a/b"),
+               ("Read(./)", "{cwd}/a"), ("Read(/)", "/work/project/a"), ("Read(//etc//hosts)", "/etc/hosts"),
+               ("Read(./a/./b)", "{cwd}/a/b"), ("Read(//etc/)", "/etc/hosts")]
+
+
+@pytest.mark.parametrize("entry,path", ANCHOR_ONLY)
+def test_patterns_that_name_only_their_anchor_cover_it(entry, path):
+    rule = path_rule(entry)
+    assert not rule.unsupported
+    assert rule.matches(path.replace("{home}", HOME).replace("{cwd}", CWD), [CWD])
+    assert entry == "Read(//)" or not rule.matches("/somewhere/else", [CWD])
+
+
+@pytest.mark.parametrize("entry", ["Read(../secret.env)", "Read(./a/../b)", "Read(~/../x)", "Edit(//etc/../x)"])
+def test_a_pattern_with_dot_dot_is_unsupported_and_nothing_is_approved_unasked(entry, tree):
+    project, _ = tree
+    found = RuleSet()
+    found.add(["Bash"], "allow", "user settings")
+    found.add([entry], "deny", "project settings", [str(project)])
+    assert found.paths[0].unsupported
+    got = [decide("cat notes.txt", found, mode=mode, cwd=str(project), project_dir=str(project)) for mode in MODES]
+    assert [verdict.outcome for verdict in got] == by_mode("ask") and "cannot interpret" in got[0].reason
+    assert [decide("cat *.txt", found, mode=mode, cwd=str(project)).outcome for mode in MODES] == by_mode("ask")
+
+
+ADVERSARIAL = {
+    "2,000-segment path": "cat " + "a/" * 2000 + "secret.env",
+    "20,000 characters of slashes": "cat " + "/" * 19_990,
+    "recursive glob from the root": "cat /**",
+    "recursive glob under /usr": "cat /usr/**",
+    "NUL byte": "cat secret.env\x00",
+    "deep nesting": "$(" * 5000 + "cat secret.env" + ")" * 5000,
+    "unbalanced nesting": "(" * 50_000,
+    "many separators": "; ".join(["cat x"] * 5000),
+    "many words": "cat " + " ".join(["a/b/c/d"] * 1900),
+    "many option clusters": "tool " + " ".join(["-" + "x" * 60] * 300),
+    "many quotes": "'" * 99_999,
+    "long word": "cat " + "x" * 99_000,
+    "heredoc storm": "cat <<A\n" * 3000,
+    "many dot-dots": "cat " + "../" * 60 + "secret.env",
+    "pieces": "tool " + "=".join(["a:b,c@d"] * 500),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ADVERSARIAL))
+def test_decide_stays_fast_and_never_raises_on_adversarial_input(tree, name):
+    import time
+    project, found = tree
+    found.add(["Read(//**/.env)", "Read(~/.ssh/**)", "Edit(**/*.pem)", "Read(src/**/x*y*z*)"], "deny", "user settings", ["/"])
+    found.add(["Bash(curl *)", "Bash(* --force *)"], "deny", "user settings")
+    for mode in ("default", "bypassPermissions", "auto"):
+        started = time.perf_counter()
+        verdict = decide(ADVERSARIAL[name], found, mode=mode, cwd=str(project), project_dir=str(project))
+        took = time.perf_counter() - started
+        assert took < 1.0, f"{name}: {took:.2f} s"
+        if name not in ("many dot-dots", "many option clusters", "many words", "pieces"):      # those are plain
+            assert verdict.outcome in ("ask", "deny"), (name, mode, verdict.outcome)
+        test_decide_stays_fast_and_never_raises_on_adversarial_input.slowest = max(
+            getattr(test_decide_stays_fast_and_never_raises_on_adversarial_input, "slowest", 0.0), took)
+
+
+def test_the_recogniser_is_what_splits_a_command_for_bash_rules():
+    """A plain command is split exactly; nothing else is trusted to have been split right."""
+    from datafog_guard import plain
+    parsed = plain.recognise("git status && npm test | tee 'a;b && c.log' ; ls")
+    assert [parsed.source(simple) for simple in parsed.commands] == ["git status", "npm test", "tee 'a;b && c.log'", "ls"]
+    for text in ("a $(b)", "a `b`", "a <<E\nb\nE", "a \\\nb", "(a)", "{ a; }", "a &", "if a; then b; fi", "a=1 b", "a | cd x",
+                 "a *", "a ~u/x", "a 2>&1 |& b", "a\x00", "a # b", "a >| b", "a <<< b", "a <(b)", "x" * 30_000, "", "  ",
+                 "; a", "a ;; b", "a &&", "a | | b", "> x", "a > ", "a 'unterminated", 'a "$b"', "export A=b"):
+        assert plain.recognise(text) is None, text
