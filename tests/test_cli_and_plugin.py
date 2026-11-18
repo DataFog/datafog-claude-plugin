@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 
 import pytest
 from conftest import EMAIL, NOTES, ROOT, assert_no_sentinel, corrupt_vault
@@ -177,7 +179,7 @@ def test_every_hook_entry_blocks_on_failure_and_uses_the_launcher():
         assert len(groups) == 1 and len(groups[0]["hooks"]) == 1, f"{event}: exactly one hook"
         entry = groups[0]["hooks"][0]
         assert entry["type"] == "command" and entry["onFailure"] == "block", event
-        assert entry["command"].startswith('sh "${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard" ')
+        assert entry["command"].startswith('"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard" ')
         assert entry["timeout"] >= 30
     assert hooks["PreToolUse"][0]["matcher"] == "*", "one PreToolUse hook for all tools: only one may rewrite input"
     assert hooks["PostToolUse"][0]["matcher"] == "*"
@@ -193,9 +195,39 @@ def test_manifests():
     market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
     assert market["plugins"][0]["name"] == "datafog"
     servers = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]
-    assert list(servers) == ["guard"] and servers["guard"]["args"][-1] == "mcp"
+    assert list(servers) == ["guard"] and servers["guard"]["args"] == ["mcp"]
+    assert servers["guard"]["command"] == "${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard"
     from datafog_guard.hook import OWN_MCP_PREFIX
     assert OWN_MCP_PREFIX == f"mcp__plugin_{plugin['name']}_guard__"
+
+
+def test_declared_executable_entrypoints_work_with_spaces(box):
+    plugin = box.tmp / "plugin with spaces"
+    for name in ("scripts", "engine"):
+        shutil.copytree(ROOT / name, plugin / name, ignore=shutil.ignore_patterns("__pycache__"))
+    launcher = plugin / "scripts" / "datafog-guard"
+    assert launcher.read_text().startswith("#!/bin/sh\n") and os.access(launcher, os.X_OK)
+    # Route the private interpreter slot to the test interpreter without installing packages.
+    python = box.data / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o700)
+    (python.parent.parent / ".datafog-installed").write_text(f"{CORE_REQUIREMENT} {VAULT_REQUIREMENT}")
+    env = box.env(CLAUDE_PLUGIN_ROOT=str(plugin))
+    hook = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    result = subprocess.run(["/bin/sh", "-c", hook], input=json.dumps(
+        {"hook_event_name": "SessionStart", "source": "startup"}).encode(), capture_output=True,
+        env=env, cwd=box.project, timeout=30)
+    assert result.returncode == 0 and "DataFog guard: on" in json.loads(result.stdout)["systemMessage"], result.stderr
+    server = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["guard"]
+    argv = [part.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin)) for part in [server["command"], *server["args"]]]
+    requests = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}]
+    result = subprocess.run(argv, input="".join(json.dumps(r) + "\n" for r in requests).encode(),
+                            capture_output=True, env=env, cwd=box.project, timeout=30)
+    assert result.returncode == 0, result.stderr
+    replies = [json.loads(line) for line in result.stdout.splitlines()]
+    assert {tool["name"] for tool in replies[-1]["result"]["tools"]} == {"edit_with_markers", "protection_status"}
 
 
 def test_commands_exist_and_purge_cannot_be_invoked_by_the_model():

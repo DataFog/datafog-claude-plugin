@@ -1,0 +1,135 @@
+{
+  "marketplace": "datafog-readiness-0abb4fc0a159",
+  "work": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-installed.t3p3h5qs",
+  "cases": [
+    {
+      "case": "installed-read",
+      "version": "2.1.327",
+      "checks": {
+        "Read returned markers": true,
+        "first startup bootstrapped engine": true,
+        "successful host process": true,
+        "no sentinel in model tool results": true,
+        "loaded installed cached plugin": true
+      },
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-installed.t3p3h5qs/log/runs/01-installed-read.jsonl"
+    },
+    {
+      "case": "installed-bash",
+      "version": "2.1.327",
+      "checks": {
+        "Bash returned markers": true,
+        "successful host process": true,
+        "no sentinel in model tool results": true,
+        "loaded installed cached plugin": true
+      },
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-installed.t3p3h5qs/log/runs/02-installed-bash.jsonl"
+    },
+    {
+      "case": "installed-mcp-edit",
+      "version": "2.1.327",
+      "checks": {
+        "MCP edit called": true,
+        "real value plus suffix on disk": true,
+        "no marker on disk": true,
+        "successful host process": true,
+        "no sentinel in model tool results": true,
+        "loaded installed cached plugin": true
+      },
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-installed.t3p3h5qs/log/runs/03-installed-mcp-edit.jsonl"
+    },
+    {
+      "case": "installed-mcp-project-boundary",
+      "version": "2.1.327",
+      "checks": {
+        "MCP edit called": true,
+        "server refused outside project": true,
+        "outside fixture unchanged": true,
+        "successful host process": true,
+        "no sentinel in model tool results": true,
+        "loaded installed cached plugin": true
+      },
+      "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-installed.t3p3h5qs/log/runs/04-installed-mcp-project-boundary.jsonl"
+    }
+  ],
+  "cleanup": [
+    {
+      "step": "uninstall",
+      "success": true
+    },
+    {
+      "step": "marketplace-remove",
+      "success": true
+    },
+    {
+      "step": "purge-fixture-session",
+      "success": true
+    }
+  ],
+  "installed": {
+    "id": "datafog@datafog-readiness-0abb4fc0a159",
+    "version": "0.2.1",
+    "scope": "local",
+    "enabled": true,
+    "installPath": "/Users/sid/.claude/plugins/cache/datafog-readiness-0abb4fc0a159/datafog/0.2.1",
+    "installedAt": "2026-11-18T19:17:27.940Z",
+    "lastUpdated": "2026-11-18T19:17:27.940Z",
+    "projectPath": "/private/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-installed.t3p3h5qs/project",
+    "mcpServers": {
+      "guard": {
+        "command": "${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard",
+        "args": [
+          "mcp"
+        ],
+        "env": {
+          "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
+          "DATAFOG_DATA_DIR": "${DATAFOG_DATA_DIR:-}",
+          "DATAFOG_VAULT_DIR": "${DATAFOG_VAULT_DIR:-}",
+          "DATAFOG_VAULT_KEY": "${DATAFOG_VAULT_KEY:-}"
+        }
+      }
+    },
+    "projectEnabled": false,
+    "hasUserConfig": true
+  },
+  "cache_matches_source": true,
+  "fresh_bootstrap": true,
+  "interactive_first_start": true,
+  "fixture_trust_recorded": true,
+  "cleanup_verified": true,
+  "baseline_revision": "964fe1004bfd5c1188f46990a08d4f15e748c6ca",
+  "candidate_production_sha256": {
+    ".claude-plugin/marketplace.json": "0921542848f7f5d8aa96770a93c9021d20d8a31e674aae29c3780b7defde6151",
+    ".claude-plugin/plugin.json": "a804eaeab8e1b483079e8d7915401021b01875fe54ff3b8a79847b0359b57648",
+    ".mcp.json": "646e5bd13f160e44dff4f28806a53e4effcc6e63ab6e6706b0098d082715e158",
+    "engine/datafog_guard/__init__.py": "e486296852d8dc74ba7086fef26537074ddd28cca1a96610e9adfdba2a95b4ea",
+    "engine/datafog_guard/__main__.py": "19a405af122b22e15bd4759ef48350c1b57d802c3ffb37ac9f5e6da7a608af9f",
+    "engine/datafog_guard/bashwrap.py": "7d711399b49f6a526200fef8ec4ca6f626588f98f84ce6083cea5c00947a8809",
+    "engine/datafog_guard/ccperms.py": "99a93d82a59f2eed8d9f549a463c62a2ee90b8504a28facf03247900a3aee185",
+    "engine/datafog_guard/cli.py": "45930b7f694e42e06fbf955ff74cb8927a0bd0f217fa18ea9dca0d1edb78e6f1",
+    "engine/datafog_guard/config.py": "98440b35d5e03558abdc5796920fc286f2da67d4f2c49dadb84a8c8fc5bddbe8",
+    "engine/datafog_guard/dependencies.py": "f3aee7c7d9a012922aedf8be72df110ebb922bc4203c8db5568fbdf5e38a4390",
+    "engine/datafog_guard/engine.py": "9b23f76cc1cdf47ca1d3943c87497f0c957b2bc01839ed736775bd04c7f9b640",
+    "engine/datafog_guard/errors.py": "d5e2adc7f4da6dec409697d1b35f86ed0e62d596d783eee21a98a5817c4faeda",
+    "engine/datafog_guard/files.py": "aa1583b1ca84c9f5aa555642f24a397367db6d281ead1cfa272274bad5534faf",
+    "engine/datafog_guard/filtercmd.py": "141196d30c6ec4523968b1fb02ad800945c96fca4789b0a70fd37620089aae43",
+    "engine/datafog_guard/hook.py": "cf8e205d96cd41bb8ce9d65db6ba598a6d6bcedc1f052707c308881fcc1eb0a4",
+    "engine/datafog_guard/log.py": "dc3913d9763c2db69d71f57bb7c6bf8e34dd9f76e8c5e0117c5eaf7eebd26f6f",
+    "engine/datafog_guard/mcp_server.py": "ac0fe6c88703f5e5c0f8cf2a32a75e918a7ce51f9c04a6a2bb9a4a9a7223a774",
+    "engine/datafog_guard/plain.py": "d48b94c0bb3b1ee7fd00e4f30f8829f958bbbe76417577af48912cc682db84bb",
+    "engine/datafog_guard/shapes.py": "6df11350a02391f43437af94593417a0f2405eefa9d05509a1e54b3ad6178635",
+    "engine/datafog_guard/shellsub.py": "2326384c88e1b601a7094172d997c38d57d6efebabc2853345917592f41df95d",
+    "engine/datafog_guard/store.py": "81d9bcfd5f354fb68853d84581b893d0fd0fe5680a959dd0614d4019769ae150",
+    "engine/datafog_guard/stream.py": "f2699c5c3d01b19525afea292c34759030f566356238b0bcb0af717f60022cb4",
+    "engine/datafog_guard/support.py": "33be91dd33bcce5b814c1ae9746cb71b5dc5786f2e671dd0c2d181e7eb7281ca",
+    "engine/datafog_guard/vault.py": "ff39ecb3dc287c6dff32ad72fe5825a15e35df6d141db65f18ccc0f0d052d1c5",
+    "engine/run.py": "c510ca7de991bcd0ad8b19412e4b517a73d60dd964b849a36fae242f44883c47",
+    "hooks/hooks.json": "bd7408d4baa60043d4da7383c8ee128d0cd71871fb5e33c215be276abd59ed9a",
+    "pyproject.toml": "eb370c164bd912c4a92551029cfb2c3e0d821964b28d1ef7fbd42f1844b653b0",
+    "scripts/bootstrap.sh": "916c54191844e614334201084258fab02685aa2485583063ec2dc4caf80b3195",
+    "scripts/datafog-guard": "c4d5d471711b20429e1c7f252b274f62c1c3d10cde1676009de4a930491081f0",
+    "scripts/verify-manifests.sh": "6f03cbf9101da54a72f2ec2eed49c08ea26e97a40b946985285524018eeb97af",
+    "scripts/wrap.sh": "4549077dce3ce12225d65e5197104bb3db67deda0fc0e1125b8d3cf511b1a4e4"
+  },
+  "purpose": "Unreleased direct-executable A/B candidate; portal resolution not yet verified."
+}

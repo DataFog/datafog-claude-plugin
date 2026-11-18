@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" session-start",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" session-start",
             "timeout": 300,
             "onFailure": "block",
             "statusMessage": "DataFog guard: checking protection"
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" hook",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" hook",
             "timeout": 30,
             "onFailure": "block"
           }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" hook",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" hook",
             "timeout": 60,
             "onFailure": "block"
           }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" hook",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard\" hook",
             "timeout": 60,
             "onFailure": "block"
           }

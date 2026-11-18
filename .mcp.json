@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "guard": {
-      "command": "sh",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard", "mcp"],
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/datafog-guard",
+      "args": ["mcp"],
       "env": {
         "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
         "DATAFOG_DATA_DIR": "${DATAFOG_DATA_DIR:-}",

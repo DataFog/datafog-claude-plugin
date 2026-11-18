@@ -145,7 +145,7 @@ class Session:
             for key, value in (server.get("env") or {}).items():
                 env[key] = re.sub(r"\$\{(\w+)(?::-([^}]*))?\}",
                                   lambda m: self.env.get(m.group(1)) or (m.group(2) or ""), value)
-            argv = [server["command"]] + [a.replace("${CLAUDE_PLUGIN_ROOT}", self.plugin) for a in server["args"]]
+            argv = [a.replace("${CLAUDE_PLUGIN_ROOT}", self.plugin) for a in [server["command"], *server["args"]]]
             requests = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
                         {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                          "params": {"name": "edit_with_markers", "arguments": tool_input}}]
