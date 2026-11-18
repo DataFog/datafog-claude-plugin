@@ -51,7 +51,7 @@ class Settings:
         self.background_bash = "deny"               # "deny" | "allow"
         self.egress_policy = "ask"                  # "ask" | "deny" | "allow"
         self.restore_in_mcp_input = False
-        self.recall_required = True
+        self.vault_key = "keystore"                 # "keystore" | "file" (weaker: the key lies beside the data)
         self.keep_vault_on_uninstall = keep_vault_on_uninstall
         self.max_scan_bytes = 5 * MIB
         # config mistakes; they make the engine unhealthy
@@ -156,7 +156,7 @@ ENV_OVERRIDES = {
     "DATAFOG_RESTORE_IN_BASH": "restore_in_bash",
     "DATAFOG_BACKGROUND_BASH": "background_bash",
     "DATAFOG_EGRESS_POLICY": "egress_policy",
-    "DATAFOG_RECALL_REQUIRED": "recall_required",
+    "DATAFOG_VAULT_KEY": "vault_key",
     "DATAFOG_MAX_SCAN_BYTES": "max_scan_bytes",
     "DATAFOG_KEEP_VAULT_ON_UNINSTALL": "keep_vault_on_uninstall",
 }
@@ -243,7 +243,11 @@ def load() -> Settings:
             value = "off" if key == "restore_in_bash" else "deny"
         setattr(settings, key, value)
     settings.restore_in_mcp_input = _truthy(merged.get("restore_in_mcp_input"), False)
-    settings.recall_required = _truthy(merged.get("recall_required"), True)
+    vault_key = str(merged.get("vault_key", "keystore")).strip().lower()
+    if vault_key not in ("keystore", "file"):
+        problems.append("vault_key must be keystore or file")
+        vault_key = "keystore"
+    settings.vault_key = vault_key
     try:
         settings.max_scan_bytes = max(1024, int(merged.get("max_scan_bytes", settings.max_scan_bytes)))
     except (TypeError, ValueError):
