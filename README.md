@@ -756,7 +756,7 @@ Wall time of one whole process (starting Python, opening the vault, the work), m
 | Runner, one marker restored | 73 / 86 ms | 77 / 88 ms | 86 / 116 ms |
 
 Starting Python alone is 11 ms of each. With 19,000 values in the vault a rewrite takes
-about 230 ms (150 ms before) and a Bash command with a marker about 350 ms (185 ms before),
+about 220 ms (150 ms before) and a Bash command with a marker about 320 ms (185 ms before),
 because core reads and decrypts the whole vault for each operation. **The macOS Keychain
 was not measured** (no Mac was available for this build); the optional live case below does.
 
