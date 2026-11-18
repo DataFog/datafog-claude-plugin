@@ -1,0 +1,358 @@
+[
+  {
+    "case": "reviewer-read",
+    "checks": {
+      "Read returned markers": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/01-reviewer-read.jsonl"
+  },
+  {
+    "case": "reviewer-bash",
+    "checks": {
+      "Bash returned markers": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/02-reviewer-bash.jsonl"
+  },
+  {
+    "case": "reviewer-mcp-edit",
+    "checks": {
+      "MCP edit called": true,
+      "real value restored on disk": true,
+      "no marker on disk": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/03-reviewer-mcp-edit.jsonl"
+  },
+  {
+    "case": "built-in-edit-marker",
+    "checks": {
+      "Edit called": true,
+      "real value restored on disk": false,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/04-built-in-edit-marker.jsonl"
+  },
+  {
+    "case": "runner-complete-output",
+    "checks": {
+      "all stdout lines collected": true,
+      "all stderr lines collected": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/05-runner-complete-output.jsonl"
+  },
+  {
+    "case": "runner-timeout",
+    "checks": {
+      "requested short timeout used": true,
+      "host reported timeout": false,
+      "descendant side effect absent": false,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/06-runner-timeout.jsonl"
+  },
+  {
+    "case": "mode-marker-dontAsk",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/07-mode-marker-dontAsk.jsonl"
+  },
+  {
+    "case": "mode-marker-plan",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/08-mode-marker-plan.jsonl"
+  },
+  {
+    "case": "mode-marker-bypassPermissions",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/09-mode-marker-bypassPermissions.jsonl"
+  },
+  {
+    "case": "mode-marker-auto",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.4j4tc34d/log/runs/10-mode-marker-auto.jsonl"
+  },
+  {
+    "case": "built-in-edit-marker-old-string",
+    "checks": {
+      "Edit called": true,
+      "host rejects marker old_string before hook": true,
+      "file unchanged": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.jhxqw07_/log/runs/01-built-in-edit-marker-old-string.jsonl"
+  },
+  {
+    "case": "built-in-edit-marker-new-string",
+    "checks": {
+      "Edit called": true,
+      "real value restored on disk": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.jhxqw07_/log/runs/02-built-in-edit-marker-new-string.jsonl"
+  },
+  {
+    "case": "runner-cancel",
+    "checks": {
+      "TaskStop called": true,
+      "host confirmed stop": true,
+      "descendant side effect absent": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.a3ny1fev/log/runs/01-runner-cancel.jsonl"
+  },
+  {
+    "case": "runner-timeout-no-background",
+    "checks": {
+      "requested short timeout used": true,
+      "host reported timeout": true,
+      "descendant side effect absent": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.iu7b80wn/log/runs/01-runner-timeout-no-background.jsonl"
+  },
+  {
+    "case": "mode-marker-dontAsk",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.l3pz6ig5/log/runs/01-mode-marker-dontAsk.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_016LqncoxEZwZfbaWbDatFkt",
+        "permission_mode": "dontAsk",
+        "agent_id": null,
+        "agent_type": null
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  },
+  {
+    "case": "mode-marker-plan",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.l3pz6ig5/log/runs/02-mode-marker-plan.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01QWanFKqmD7BJ6VLzTUmPpL",
+        "permission_mode": "plan",
+        "agent_id": null,
+        "agent_type": null
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  },
+  {
+    "case": "mode-marker-bypassPermissions",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.l3pz6ig5/log/runs/03-mode-marker-bypassPermissions.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01T2m21PzJpEvv1529em4gjF",
+        "permission_mode": "bypassPermissions",
+        "agent_id": null,
+        "agent_type": null
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  },
+  {
+    "case": "mode-marker-auto",
+    "checks": {
+      "Bash attempted": true,
+      "host denied call": true,
+      "denied command retains marker": true,
+      "denial contains no raw value": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.l3pz6ig5/log/runs/04-mode-marker-auto.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01RDLkqqX1LbbuqGVUxwb1tv",
+        "permission_mode": "auto",
+        "agent_id": null,
+        "agent_type": null
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  },
+  {
+    "case": "subagent-mode",
+    "checks": {
+      "subagent Read observed": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.l3pz6ig5/log/runs/05-subagent-mode.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Agent",
+        "tool_use_id": "toolu_01VdxuNDfRHSDJhLEURSGv5M",
+        "permission_mode": "acceptEdits",
+        "agent_id": null,
+        "agent_type": null
+      },
+      {
+        "tool_name": "Read",
+        "tool_use_id": "toolu_01GAi4VUoEXhDd2mu3vbjDTa",
+        "permission_mode": "acceptEdits",
+        "agent_id": "a3e1789b33946604b",
+        "agent_type": "general-purpose"
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  },
+  {
+    "case": "sandbox-bash",
+    "checks": {
+      "Bash returned markers": true,
+      "no tool requested sandbox bypass": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.20ul20yu/log/runs/01-sandbox-bash.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01R2EhopPvTXQ8Diw759xLrZ",
+        "permission_mode": "acceptEdits",
+        "agent_id": null,
+        "agent_type": null
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  },
+  {
+    "case": "sandbox-boundary",
+    "checks": {
+      "Bash returned markers": true,
+      "sandbox blocked protected write": true,
+      "host output reports denied operation": true,
+      "no tool requested sandbox bypass": true,
+      "successful host process": true,
+      "no sentinel in model tool results": true
+    },
+    "version": "2.1.327",
+    "transcript": "/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-readiness.z4ur_11w/log/runs/01-sandbox-boundary.jsonl",
+    "observed_hook_inputs": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01GQ5TyaTFZJ8iEU3tu3QmWd",
+        "permission_mode": "acceptEdits",
+        "agent_id": null,
+        "agent_type": null
+      }
+    ],
+    "provenance": {
+      "revision": "3c41b497bba83c0a98cc6edb876946e7d187d4a6",
+      "tracked_diff_sha256": "ea295d2f638e37313e8a55ebe7dfbf79c0ab1f54d5ecdf2be0e27140954dfb14",
+      "dirty": true
+    }
+  }
+]

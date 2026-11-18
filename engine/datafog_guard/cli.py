@@ -156,7 +156,8 @@ def doctor() -> int:
         started = time.perf_counter()
         from importlib.metadata import version
 
-        import datafog_core
+        from .vault import _core
+        datafog_core = _core()
         check(f"detector library ({CORE_REQUIREMENT})", True,
               f"datafog-core {version('datafog-core')}, import {1000 * (time.perf_counter() - started):.1f} ms")
         missing = [name for name in settings.entities if name not in datafog_core.capabilities()["entities"]]
@@ -167,7 +168,8 @@ def doctor() -> int:
         started = time.perf_counter()
         from importlib.metadata import version
 
-        import datafog_fogvault  # noqa: F401
+        from .store import _fogvault
+        _fogvault()
         check(f"vault library ({VAULT_REQUIREMENT})", True, f"datafog-fogvault {version('datafog-fogvault')}, "
               f"import {1000 * (time.perf_counter() - started):.1f} ms")
     except Exception as error:

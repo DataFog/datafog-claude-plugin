@@ -113,6 +113,17 @@ def break_detector_blind(box):
     box.extra_env["PYTHONPATH"] = f"{fake}{os.pathsep}{ENGINE}"
 
 
+def break_dependency_version(box, name):
+    fake = box.tmp / "fake"
+    fake.mkdir()
+    (fake / "sitecustomize.py").write_text(
+        "import importlib.metadata\n"
+        "original = importlib.metadata.version\n"
+        f"importlib.metadata.version = lambda name: '9.9.9' if name == {name!r} else original(name)\n")
+    from conftest import ENGINE
+    box.extra_env["PYTHONPATH"] = f"{fake}{os.pathsep}{ENGINE}"
+
+
 def break_unwritable_vault(box):
     box.vault.mkdir()
     os.chmod(box.vault, 0o500)
@@ -144,6 +155,8 @@ BREAKS = {
     "locked_vault": break_locked,
     "detector_import_failure": break_detector_import,
     "detector_finds_nothing": break_detector_blind,
+    "unreviewed_detector_version": lambda box: break_dependency_version(box, "datafog-core"),
+    "unreviewed_vault_version": lambda box: break_dependency_version(box, "datafog-fogvault"),
     "unwritable_vault": break_unwritable_vault,
     "unsupported_entity_in_config": break_bad_config,
     "config_not_json": break_config_not_json,

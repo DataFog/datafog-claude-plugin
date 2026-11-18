@@ -40,7 +40,7 @@ KEEP = {
               "speed", "inference_geo"},
 }
 KEEP["Task"] = KEEP["Agent"]
-_BINARY_ITEM_TYPES = {"image", "audio", "resource_link"}
+_BINARY_ITEM_TYPES = {"image", "audio"}
 
 
 def _keep_for(tool: str) -> set:
@@ -60,6 +60,13 @@ def _walk(node, keep: set, tool: str, leaves: list, key: str | None = None, pare
     """Collect (container, key) for every content string, depth first."""
     if isinstance(node, dict):
         if node.get("type") in _BINARY_ITEM_TYPES and (tool.startswith("mcp__") or tool in ("Agent", "Task")):
+            return
+        if node.get("type") == "resource_link" and (tool.startswith("mcp__") or tool in ("Agent", "Task")):
+            # A resource link has readable metadata, not a binary payload. Its URI is
+            # an identifier (like a file path); names, titles and descriptions are content.
+            for name, value in node.items():
+                if name not in ("type", "uri", "mimeType"):
+                    _walk(value, keep, tool, leaves, name, node)
             return
         if tool == "Bash" and node.get("isImage") is True:
             for name, value in node.items():

@@ -1,10 +1,10 @@
 [project]
 name = "datafog-guard"
-version = "0.2.0"
+version = "0.2.1"
 description = "Engine of the DataFog Claude Code plugin"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-dependencies = ["datafog-core>=1.7.0,<1.8", "datafog-fogvault>=1.7.0,<1.8"]
+dependencies = ["datafog-core==1.7.0", "datafog-fogvault==1.7.0"]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10"]

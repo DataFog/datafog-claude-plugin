@@ -52,7 +52,9 @@ MARKER_NOTE = (
     "print the original value, and never ask the user for it. (3) The built-in Edit tool cannot "
     "match a line that contains a marker: to change such a line use the tool "
     f"{EDIT_TOOL} (same arguments as Edit). (4) Markers sent to web or third-party MCP tools "
-    "are NOT swapped back. (5) Background Bash commands are refused; run commands in the foreground. "
+    "are NOT swapped back. (5) Explicit background Bash requests require background_bash: allow; "
+    "otherwise request foreground commands. "
+    "Claude Code may still move a timed-out command to the background; that does not mean it stopped. "
     "(6) Each Bash command runs in a fresh shell: `cd` carries over to the next command, but variables, "
     "functions and aliases do not."
 )
@@ -236,9 +238,9 @@ def pre_bash(session: Session, tool_input: dict, record: dict, permission_mode: 
     if not isinstance(command, str) or not command.strip():
         return None
     if tool_input.get("run_in_background") and settings.background_bash != "allow":
-        return deny("DataFog: background commands are refused because their output is read later, outside "
-                    "the output filter. Run the command in the foreground (set background_bash to allow to "
-                    "change this).")
+        return deny("DataFog: explicit background commands are refused by your background_bash policy. "
+                    "Request the command in the foreground (set background_bash to allow to change this). "
+                    "Claude Code's automatic backgrounding at a timeout is a separate host setting.")
     if _mentions_vault(command, settings):
         return deny("DataFog: commands that name the vault directory are refused; it holds the real values.")
     if _names_own_config(command, settings):

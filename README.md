@@ -25,8 +25,8 @@ Linux needs a working Secret Service, or an explicit, weaker file-key setting. I
 Linux ARM/musl/older glibc and Windows are unsupported. Unsupported machines and unavailable
 key stores block tool calls. See [Supported machines](#supported-machines) for details.
 
-**Version 0.2.0.** See [Known gaps](#known-gaps) and
-[Not verified yet](#not-verified-yet) before relying on it.
+**Version 0.2.1.** See [Known gaps](#known-gaps) and
+[Verification and remaining checks](#verification-and-remaining-checks) before relying on it.
 
 ## Requirements
 
@@ -37,9 +37,9 @@ key stores block tool calls. See [Supported machines](#supported-machines) for d
 - `sh` and `bash` or `zsh`.
 - `uv`, or Python 3.10 or later with `pip`, and access to PyPI on first start. The plugin
   builds a private Python environment in its data directory and installs two packages of
-  the DataFog core project: `datafog-core>=1.7.0,<1.8` (the detector) and
-  `datafog-fogvault>=1.7.0,<1.8` (the encrypted vault). Detection and storage are local;
-  nothing is sent anywhere.
+  the DataFog core project: `datafog-core==1.7.0` (the detector) and
+  `datafog-fogvault==1.7.0` (the encrypted vault). Detection and storage are local;
+  scanned text and vault values are not sent to a DataFog service.
 
 ### Supported machines
 
@@ -80,7 +80,7 @@ DataFog guard: on. Vault: user data folder (kept on uninstall), encrypted, key i
 
 The first start also creates the vault and stores its key in your key store. On macOS this
 adds one entry to the login Keychain (service `DataFog.ApplicationVault.v1`); macOS may ask
-you to allow access, see [Not verified yet](#not-verified-yet).
+you to allow access, see [Verification and remaining checks](#verification-and-remaining-checks).
 
 If the environment cannot be installed, the status line says exactly which command to
 run, and every tool call is blocked until it is fixed. The plugin does not run
@@ -140,6 +140,10 @@ the value). Digits written directly onto an address with no separator
 Markers sent to WebFetch, WebSearch, subagents and third-party MCP tools are **not**
 swapped back: that input leaves your machine or goes to another model.
 
+For unscannable files, the tested Claude Code 2.1.299 UI shows a generic Read permission
+prompt and may omit DataFog's explanation. Approving an image or PDF read exposes that
+content unchecked. Set `unscannable_policy: deny` if those reads must always be blocked.
+
 ### Names and street addresses
 
 Adding these is worthwhile: names and ordinary mailing addresses are a large gap in
@@ -183,6 +187,20 @@ output, tool output and files alike. `123-<ESC>[01;31m45<ESC>[m-6789` from
 `grep --color=always` becomes one marker, and writing that marker back restores the
 original bytes.
 
+### Background commands and timeouts
+
+`background_bash: deny` blocks explicit `run_in_background: true` requests. It cannot
+prevent Claude Code from moving a foreground command to the background when its timeout
+expires. This occurred in the real-host 2.1.327 readiness check: the command continued
+and completed its delayed write. Its output still passes through the DataFog runner.
+
+To make foreground timeouts stop commands, set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+before starting Claude Code. This also disables other host background features; see
+[Claude Code's timeout behavior](https://code.claude.com/docs/en/tools-reference#foreground-commands-that-move-to-the-background)
+and [environment-variable reference](https://code.claude.com/docs/en/env-vars).
+Do not treat a message saying a command moved to the background as a completed command
+or a cancelled task.
+
 ### Markers in Bash commands
 
 Swapping a marker for the real value inside a command is necessary for honest work
@@ -198,7 +216,10 @@ vault does not know are always left as text.
 command. What it hands back to Claude Code is your command, wrapped, **with the markers
 still in it**, plus a ticket: a signature over exactly that command text, made with a key
 kept in the vault directory. So the permission prompt, the session transcript and the
-record of a denied call show `grep -c [[EMAIL_7KQ4ZM]] notes.txt`, not the address. When
+record of a denied call retain `grep -c [[EMAIL_7KQ4ZM]] notes.txt`, not the address.
+In the tested interactive Claude Code 2.1.299 prompt, the command appears inside the
+full runner wrapper, including paths and the restore ticket, with DataFog's explanation
+and Yes/No choices. When
 the command runs, the plugin's runner opens the vault, checks the ticket, puts the values
 in, and passes the result to the child shell through a pipe. The restored command is never
 printed, logged, written to a file, placed in an environment variable or in the argument
@@ -512,9 +533,10 @@ yet. This is the main source of extra prompts and is meant to be loosened later
   A deny rule that matches that text, such as `Bash(. *)` or `Bash(* && *)`, blocks every
   Bash command while the plugin is on. The plugin detects this for the rules it can read
   and says so in the denial instead of failing silently.
-- **"Yes, and don't ask again" on a prompt** makes Claude Code save a rule for the
-  rewritten command, which the plugin does not use. Add a rule for the original command to
-  a settings file by hand.
+- **Hook-required Bash confirmation has no persistent approval option in the tested
+  Claude Code 2.1.299 UI:** it offers Yes/No. Add a rule for the original command to a
+  settings file if appropriate; rules do not override the separate marker-restoration
+  confirmation policy. Other host permission prompts may behave differently.
 - With `bash_wrap: off` the command is not rewritten, the plugin returns no decision,
   and Claude Code applies your rules itself; markers are then never restored.
 
@@ -526,6 +548,17 @@ never found. The plugin adds a tool for this, `edit_with_markers` (same argument
 Edit), which swaps the markers locally, applies the edit with Edit's "must match exactly
 once" rule, and returns line numbers and counts only. Claude is told about it at session
 start. It refuses paths outside the project directory.
+
+The marker-aware editor also enforces Read/Edit deny and ask rules from the settings
+files the plugin can read. A matching ask rule is refused because this MCP tool cannot
+open the required file-permission prompt; use the built-in file tools or change the rule
+yourself. Unreadable settings or unsupported path rules cause refusal.
+
+An in-project symlink remains a symlink: the editor updates its resolved in-project
+target. It refuses edits if the target or path changes while preparing the replacement,
+and asks you to read the current file and retry. Advisory locking serializes cooperating
+edits. It cannot guarantee atomic conflict detection against an unrelated writer racing
+the final filesystem replacement.
 
 ## Known gaps
 
@@ -579,7 +612,8 @@ Ways a real value can still reach the model or leave a trace.
 12. **Bash, Read and Edit permission rules that the plugin cannot read are not enforced for
     Bash commands**, commands that are not simple always ask, and a `Read` deny rule does not
     stop a command that reads the file without naming it. See [Bash permissions](#bash-permissions).
-13. **File names and paths are never tokenized**, including in Glob and Grep results.
+13. **File names, paths and resource-link URIs are never tokenized**, including in Glob
+    and Grep results. Human-readable resource-link names, titles and descriptions are scanned.
 14. **Binary command output** is passed through; text inside it is tokenized, but a value
     split by invalid bytes is not found.
 15. **A value over 32 KiB** cannot be stored; a file containing one cannot be read through
@@ -590,18 +624,13 @@ Ways a real value can still reach the model or leave a trace.
 17. **A value restored into a Bash command is visible in the process list** for as long as
     a program the command started holds it as an argument, and a value that starts with `-`
     may be read as an option. See [Markers in Bash commands](#markers-in-bash-commands).
-18. **KNOWN ISSUE: an e-mail domain can reach the model when a non-ASCII letter touches the
-    address** ([datafog-core #272](https://github.com/DataFog/datafog-core/issues/272),
-    present in core 1.5.0 to 1.7.0). A letter or digit outside ASCII written directly against
-    an address, with no space or punctuation between, is read as part of the address. For a
-    single address that only makes the marker cover a little more (`連絡先ada@example.com`
-    becomes one marker). **Between two addresses it leaks:** `alice@example.comとbob@example.net`
-    is read as one value, `alice@example.comとbob`, and the model sees
-    `[[EMAIL_…]]@example.net`: the second person's real domain. This happens in text written
-    without spaces (Japanese, Chinese, Thai, also `…@a.example.orgßname@…`). A space, a
-    full-width space or punctuation such as `。` or `：` between the letter and the address
-    avoids it. The plugin does not work around this; it is fixed in core after 1.7.0 and
-    goes away with the next core release the plugin moves to.
+18. **Joined Unicode email addresses may become one marker.** Core 1.7.0 can leave
+    the second domain exposed in text such as `alice@example.comとbob@example.net`
+    ([datafog-core #272](https://github.com/DataFog/datafog-core/issues/272)). The plugin
+    now validates an immediately stranded `@domain` with the core email detector and
+    covers the complete joined span with one reversible marker. This deliberately hides
+    connecting text too, rather than guessing address boundaries. Restoration preserves
+    the original bytes. The upstream boundary fix is merged but is not in core 1.7.0.
 19. **Phone numbers core 1.7 does not report, which core 1.4 did.** They pass to the model
     unchanged: a dotted number directly after a digit and a dot (`2.415.555.0134`, read as a
     decimal); after a digit and a comma, a number whose only separator is one dot
@@ -631,7 +660,8 @@ Behaviour worth knowing that is not a leak:
 
 What ends up in files that Claude Code itself writes (the session transcript under
 `~/.claude/projects/`, its debug log, the `permission_denials` list of a headless run) and
-in what it shows you. The model's context holds markers in every row.
+in what it shows you. Successfully protected paths replace detected values with markers;
+unscanned content and the post-tool failure window remain exceptions.
 
 | Path | Real value in Claude Code's records? |
 | :- | :- |
@@ -881,7 +911,7 @@ Release notes record the results of the release run.
 
 ### Distribution
 
-Version 0.2.0 is distributed directly from this repository. A public plugin-directory
+Version 0.2.1 is distributed directly from this repository. A public plugin-directory
 submission is deferred until the interactive approval and permission-prompt paths listed
 below have been checked; the automated live run uses headless Claude Code. Anthropic now
 accepts submissions through its [directory portal](https://claude.ai/directory/manage),
@@ -908,7 +938,7 @@ More settings go in `config.json` in the plugin's data directory
 | `restore_on_write` | `DATAFOG_RESTORE_ON_WRITE` | `true` | `false`, or a list of path globs to restrict restoring to (`*.env,*.csv`). |
 | `bash_wrap` | `DATAFOG_BASH_WRAP` | `runner` | `off` runs commands unwrapped and leaves only the after-the-fact replacement, which is not fail-closed and does not cover failing commands. Markers in commands are then never restored, and Claude Code applies your permission rules itself. |
 | `restore_in_bash` | `DATAFOG_RESTORE_IN_BASH` | `ask` | Commands that contain markers: `ask` you first, `allow` (restore without asking), or `off` (never restore; markers stay as text). Values are put in by the runner, so this needs `bash_wrap: runner`. |
-| `background_bash` | `DATAFOG_BACKGROUND_BASH` | `deny` | `allow` wraps background commands like any other. |
+| `background_bash` | `DATAFOG_BACKGROUND_BASH` | `deny` | Blocks explicit background requests; `allow` wraps them like any other. Host auto-backgrounding at a timeout is separate; see above. |
 | `egress_policy` | `DATAFOG_EGRESS_POLICY` | `ask` | For commands with markers (and restoring not `off`) that look like they send data away: `ask`, `deny`, `allow`. |
 | `restore_programs_extra` | `DATAFOG_RESTORE_PROGRAMS_EXTRA` | none | Program names, in addition to the built-in list, that may receive real values in a Bash command. You vouch that each treats its arguments as data. Read from `config.json` and the environment only. See [Markers in Bash commands](#markers-in-bash-commands). |
 | `restore_in_mcp_input` | | `false` | Swap markers back in input to third-party MCP tools. Real values then leave this process. |
@@ -920,48 +950,39 @@ More settings go in `config.json` in the plugin's data directory
 A setting the plugin cannot understand makes it stop and say so; it does not fall back
 to a default in silence.
 
-## Not verified yet
+## Verification and remaining checks
 
-The release uses the full automated suite and `tests/live/` against real headless Claude
-Code, including the optional macOS Keychain check. Release notes record the results.
-The live driver loads only its project/local fixture settings so unrelated user hooks and
-plugins do not interfere; it keeps the real login and DataFog MCP tools. Headless checks
-cannot settle every interactive or operating-system behavior below.
+The released 0.2.0 automated and headless results are recorded in its release notes.
+The 0.2.1 readiness work adds interactive and supplementary real-host evidence in
+[the host verification report](docs/verification/2026-11-18-host-readiness.md).
+Those observations used Claude Code 2.1.299 and 2.1.327 on macOS Apple Silicon;
+see the report for which version exercised each case. Candidate certification requires
+fresh results for the final code revision.
 
-- The Bash runner inside Claude Code: that `cd` carries over between calls, that Claude
-  Code collects all output, and that a cancelled or timed-out command is stopped.
-- **Interactive Bash permissions and modes beyond the headless cases:**
-  - that a hook `allow` runs a rewritten command without a prompt, in an interactive
-    session and in `claude -p`;
-  - what the permission prompt for a hook `ask` looks like, that it shows the command with
-    markers, and what "Yes, and don't ask again" saves from it;
-  - that the record of a denied call (`permission_denials`) holds the marker command;
-  - `plan` mode: whether Claude Code would have run a command that the plugin makes ask;
-  - `auto` mode: that leaving the decision to Claude Code sends the rewritten command to
-    the classifier, how the classifier judges it, and that a hook `ask` forces a prompt;
-  - `dontAsk` mode: that a hook `allow` runs and that the plugin's `deny` reads well;
-  - `bypassPermissions` mode: **what a hook `ask` does there** (steps 3, 4, 5 and the `rm`
-    check rely on it prompting; the documentation says ask *rules* still prompt in this
-    mode and does not say it for hooks);
-  - that `permission_mode` reaches the hook with the documented values, also in subagents;
-  - whether Claude Code's own rule matching agrees with the plugin's for your rules (the
-    documented examples are tests; undocumented cases use the stricter reading);
-  - that `~/.claude.json` records trust under `projects["<path>"].hasTrustDialogAccepted`
-    as documented, and where that file is when `CLAUDE_CONFIG_DIR` is set;
-  - whether Claude Code's `Read`/`Edit` path matching agrees with the plugin's beyond the
-    documented examples, and which Bash commands it applies those rules to itself;
-  - managed settings: whether a server-managed or MDM policy is in force (invisible to the
-    plugin), in which case Claude Code ignores the managed settings *file* the plugin reads.
-- **Other macOS Keychain states.** The optional live case checks creation, repeated reads,
-  full-process timing and purge. It does not test a locked Keychain, SSH access, access
-  immediately after login, or whether prompts return after updating Python or rebuilding
-  the private environment. The Keychain ties access to the program using the entry.
-- The Secret Service with KWallet, and with a keyring that is locked when a session starts.
-- What the built-in Edit tool's result shows the model after the plugin replaced it.
-- That the plugin's MCP server receives the project directory and starts on first install.
-- How a blocked prompt and an `ask` decision look to you.
-- Behaviour when Claude Code's own Bash sandbox is enabled (the runner starts the command in a new session).
-- Anything on Windows.
+Observed paths include allowed foreground Bash, marker approval and rejection,
+interactive bypass-mode marker confirmation, blocked prompts, unscannable Read prompts,
+Read/Bash/MCP-edit examples, built-in Edit result filtering, finite stdout/stderr
+collection, explicit TaskStop cancellation and timeout termination with host background
+features disabled. Default timeouts instead moved work to the background, as documented
+above. The live driver's cwd check covers carry-over between commands.
+
+Still requiring separate evidence or explicitly outside the tested scope:
+
+- Further interactive plan/auto behavior, classifier handling of wrapped commands and
+  broader host permission-rule parity beyond the tested fixtures.
+- Alternate configuration-root trust handling, server-managed policy and MDM. A policy
+  the plugin cannot read remains outside its permission matching.
+- macOS Keychain locked/denied, SSH/login and rebuilt-interpreter access. The optional
+  live case covers creation, repeated reads, timing and purge, not every key-store state.
+- KWallet and locked Linux keyrings beyond the private GNOME Keyring CI cases.
+- Final cached-release startup, upgrade and host MCP project-directory handling. Local
+  directory loading and direct cached-launcher checks prove different parts of this path.
+- Linux live UI and cancellation behavior, other terminal renderers and unsupported
+  hardware/OS runtime behavior. Windows is unsupported.
+
+See the [readiness inventory](docs/readiness.md) for gate-by-gate status. The live driver
+loads its project/local fixture settings to avoid unrelated user hooks and plugins;
+it retains the existing login and DataFog MCP tools.
 
 To run the live check on your machine (about 29 short headless `claude -p` runs in a
 throwaway temp project with a temporary vault whose key is a file in the temp directory;
@@ -982,7 +1003,7 @@ Results land in `.live/results/results.md`.
 ## Development
 
 ```sh
-uv venv && uv pip install "datafog-core>=1.7.0,<1.8" "datafog-fogvault>=1.7.0,<1.8" pytest ruff mypy
+uv venv && uv pip install "datafog-core==1.7.0" "datafog-fogvault==1.7.0" pytest ruff mypy
 DATAFOG_TEST_NETWORK=1 .venv/bin/python -m pytest    # the flag enables tests that build the private environment
 .venv/bin/ruff check . && .venv/bin/mypy
 ```
@@ -1004,5 +1025,10 @@ and the restore ticket).
 All test data is synthetic (`ada.synthetic@example.com`, test card `4242 4242 4242 4242`).
 
 ## License
+
+See [Privacy and local data handling](PRIVACY.md) for storage, retention and network
+behavior. For non-sensitive support, use the
+[issue tracker](https://github.com/DataFog/datafog-claude-plugin/issues); do not attach
+real credentials, vault files or unredacted transcripts.
 
 Apache-2.0. See [LICENSE](LICENSE).

@@ -48,6 +48,11 @@ ENTRY_LIMIT = 20_000
 # characters) the values are first narrowed to those whose first characters occur in the text.
 PREFILTER_WORK = 50_000_000
 GRAM = 4
+# Core 1.7.0 can absorb the next mailbox's local part into an email domain in
+# unspaced Unicode prose, leaving its @domain behind. Validate only that tail
+# with the same detector and cover the joined addresses as one reversible value.
+_EMAIL_TAIL = re.compile(rb"@[^\s@]*")
+_EMAIL_PROBE = "datafog-probe"
 
 
 # Characters a terminal does not show, or that move the cursor. A value split by one of them
@@ -130,10 +135,14 @@ def _views(text: str):
 
 
 def _core():
+    from . import CORE_REQUIREMENT
+    from .dependencies import check_module, reviewed_version
+    reviewed_version(CORE_REQUIREMENT)   # reject unreviewed distributions before importing their code
     try:
         import datafog_core
     except Exception as error:   # missing, wrong architecture, broken install
         raise EngineUnavailable("the datafog-core library cannot be loaded") from error
+    check_module(datafog_core, CORE_REQUIREMENT)
     return datafog_core
 
 
@@ -196,11 +205,35 @@ class Detector:
         except UnicodeError as error:
             raise TokenizeError("the text is not valid Unicode", "undecodable_text") from error
         spans = []
+        data = None
+        covered_email = (0, 0)
         for finding in findings:
             if finding.matched_text in self.allowlist:
                 continue
-            spans.append(Span(finding.byte_range.start, finding.byte_range.end, finding.entity_type))
+            start, end = finding.byte_range.start, finding.byte_range.end
+            if finding.entity_type == "EMAIL":
+                if covered_email[0] <= start and end <= covered_email[1]:
+                    continue   # the first joined-address span already covers this finding and its tail
+                data = data if data is not None else text.encode("utf-8")
+                end = self._cover_email_tail(data, end)
+                if data[start:end].decode("utf-8") in self.allowlist:
+                    continue
+                covered_email = (start, end)
+            spans.append(Span(start, end, finding.entity_type))
         return spans
+
+    @staticmethod
+    def _cover_email_tail(data: bytes, end: int) -> int:
+        while tail := _EMAIL_TAIL.match(data, end):
+            probe = _EMAIL_PROBE + tail.group().decode("utf-8")
+            findings = _core().scan(probe, {"entities": ["EMAIL"]})
+            match = next((finding for finding in findings
+                          if finding.entity_type == "EMAIL" and finding.byte_range.start == 0
+                          and finding.byte_range.end > len(_EMAIL_PROBE)), None)
+            if match is None:
+                break
+            end += match.byte_range.end - len(_EMAIL_PROBE)
+        return end
 
     def self_test(self) -> None:
         """Fail if the configuration is unusable or the detector does not find a value it must find."""

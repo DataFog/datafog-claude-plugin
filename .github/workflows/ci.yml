@@ -4,8 +4,25 @@ on:
   push:
     branches: [main, "rebuild/**"]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
+  manifests:
+    name: strict plugin and marketplace validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the reviewed Claude Code validator
+        run: npm install --global @anthropic-ai/claude-code@2.1.327
+      - name: Validate both manifests without model credentials
+        run: sh scripts/verify-manifests.sh
+
   test:
     name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
@@ -25,10 +42,10 @@ jobs:
       # tests/test_keystore.py can run the key-store mode against a private Secret Service.
       - name: Install zsh and a Secret Service (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y zsh dbus gnome-keyring libsecret-tools
+        run: sudo apt-get update && sudo apt-get install -y zsh dbus gnome-keyring libsecret-tools libglib2.0-bin
 
       - name: Install the engine's two dependencies and the test tools
-        run: python -m pip install "datafog-core>=1.7.0,<1.8" "datafog-fogvault>=1.7.0,<1.8" "pytest>=8" "ruff>=0.6" "mypy>=1.10"
+        run: python -m pip install "datafog-core==1.7.0" "datafog-fogvault==1.7.0" "pytest>=8" "ruff>=0.6" "mypy>=1.10"
 
       - name: Manifests and hook config parse
         run: |

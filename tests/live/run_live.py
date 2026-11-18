@@ -238,6 +238,8 @@ class Driver:
         self.wrap = os.path.join(REPO, "scripts", "wrap.sh")
         self.version = ""
         self.extra_flags = ["--permission-prompts", "none", "--no-session-persistence"]
+        self.tools = "Read,Write,Edit,Bash,Grep,Glob,Agent"
+        self.plugin_dir = REPO
         for name in (self.project, self.log, os.path.join(self.log, "runs"), os.path.join(self.log, "debug")):
             os.makedirs(name, exist_ok=True)
 
@@ -390,12 +392,13 @@ class Driver:
         env = dict(env or {})
         # Keep real auth/Home, but load only the fixture settings: unrelated user hooks can fail
         # or interfere with DataFog startup. Plugin MCP still loads normally.
-        argv = [self.claude, "-p", prompt + " [case:%s]" % case, "--plugin-dir", REPO,
+        argv = [self.claude, "-p", prompt + " [case:%s]" % case] + \
+               (["--plugin-dir", self.plugin_dir] if self.plugin_dir else []) + [
                 "--debug-file", os.path.join(self.log, "debug", number + ".log"),
                 "--output-format", "stream-json", "--verbose", "--max-turns", "12",
                 "--permission-mode", mode, "--setting-sources", "project,local"] + \
                (self.extra_flags if flags is None else flags) + \
-               ["--tools", "Read,Write,Edit,Bash,Grep,Glob,Agent", "--allowedTools"] + self.allowed_tools()
+               ["--tools", self.tools, "--allowedTools"] + self.allowed_tools()
         if os.environ.get("LIVE_MODEL"):
             argv += ["--model", os.environ["LIVE_MODEL"]]
         with open(path, "wb") as out, open(path[:-6] + ".stderr.txt", "wb") as err:

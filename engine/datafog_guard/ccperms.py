@@ -1058,6 +1058,31 @@ class PathFinding:
         self.unsure = ""                       # why a path rule may apply although no named path matches
 
 
+def check_file_path(rules: RuleSet, path: str, cwd: str, project_dir: str = "") -> PathFinding:
+    """Apply Read/Edit restrictions to an exact file used by the marker-aware MCP editor.
+
+    Unlike a shell command, this tool names one known file. Keep the same path matcher and
+    conservative settings handling without guessing which command arguments could be paths.
+    """
+    finding = PathFinding()
+    if len(path) > MAX_PATH_LENGTH or path.count("/") > MAX_PATH_SEGMENTS or "\x00" in path:
+        finding.unsure = "the path cannot be checked against your Read and Edit rules"
+        return finding
+    cwds = list(dict.fromkeys([os.path.abspath(cwd), os.path.abspath(project_dir or cwd)]))
+    try:
+        joined = path if os.path.isabs(path) else os.path.join(cwd, path)
+        paths = [os.path.normpath(joined), os.path.realpath(joined)]
+        finding.deny = _rule_for(rules, paths, "deny", cwds)
+        finding.ask = _rule_for(rules, paths, "ask", cwds)
+    except (OSError, ValueError):
+        finding.unsure = "the path could not be resolved for your Read and Edit rules"
+    if rules.problems:
+        finding.unsure = "a Claude Code settings file could not be read completely"
+    elif any(rule.unsupported for rule in rules.paths):
+        finding.unsure = "a Read or Edit rule uses a path pattern the plugin cannot interpret"
+    return finding
+
+
 def _texts_of(text: str) -> list[str]:
     """What in one word may be a path: the word, what follows ``=`` ``:`` ``,`` ``@`` in it, and every
     tail of a short-option cluster (``-fPATH``, ``-hfPATH``, ``-nfPATH``)."""

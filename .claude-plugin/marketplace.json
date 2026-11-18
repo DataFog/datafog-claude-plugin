@@ -11,7 +11,7 @@
     {
       "name": "datafog",
       "source": "./",
-      "description": "Replaces personal data and credentials with reversible markers before the model sees them."
+      "description": "Locally replaces detected personal data and selected credentials with reversible markers in Claude Code. See the README for coverage and platform limits."
     }
   ]
 }
