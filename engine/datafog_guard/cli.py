@@ -46,7 +46,10 @@ def status_report(for_model: bool = False) -> str:
                  + f"; background Bash: {settings.background_bash}")
     lines.append(f"Markers in Bash commands: {settings.restore_in_bash} (ask = you approve each command; "
                  "allow = restored silently; off = never restored). Values are put in by the runner when the "
-                 "command starts; the command Claude Code shows and records keeps the markers")
+                 "command starts; the command Claude Code shows and records keeps the markers. Only plain "
+                 "commands made of a short list of programs (grep, cat, sort, printf ...) get values")
+    lines.append("Extra programs you vouched for (restore_programs_extra): "
+                 + (", ".join(sorted(settings.restore_programs_extra)) or "none"))
     lines.append("Bash permissions: decided by the plugin from your Claude Code allow, ask and deny rules "
                  "(see /datafog:doctor for what it can read)")
     lines.append(f"Files that cannot be checked: {settings.unscannable_policy}")

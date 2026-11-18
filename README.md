@@ -175,13 +175,43 @@ a whole and not run:**
    place that evaluates it. Also no backticks, backslashes, line continuations, unquoted
    `* ? [ ] { }`, `~user`, comments, heredocs, here-strings, subshells, `{ }` groups, loops,
    conditionals, functions, assignments (`X=1 cmd`, `x=...`), or background `&`.
-3. **Every command name is a literal, unquoted external program.** Of the shell builtins
-   only `echo`, `true`, `:` and `printf` are accepted, and `printf` only as
-   `printf 'LITERAL FORMAT' arguments...`. No `cd`, `export`, `test`, `read`, `eval` and so
-   on. Programs that run their arguments as a command or read them as a program are
-   refused too: `env`, `sudo`, `timeout`, `nohup`, `xargs`, `sh`/`bash`/`zsh`, `ssh`,
-   `python`/`perl`/`node`/`ruby`, `awk`, `sed`, `sqlite3`, `make`, `npm`, `docker`,
-   `find ... -exec`, and others (the lists are in `shellsub.py`).
+3. **Every program in the command is on a short list.** Not only the program that gets the
+   marker: every simple command of the whole command. The name must be written bare
+   (`grep`) or as an absolute path in `/bin`, `/usr/bin`, `/usr/local/bin` or
+   `/opt/homebrew/bin` (`/usr/bin/grep`). `./grep`, `bin/grep`, `/tmp/grep` and `grep3` are
+   refused. The list:
+
+   | May take a marker as an argument | Listed, but take no marker |
+   | :- | :- |
+   | `grep` `egrep` `fgrep` `rg` `cat` `head` `tail` `wc` `nl` `tac` `rev` `fold` `cut` `tr` `paste` `join` `comm` `cmp` `column` `diff` `ls` `stat` `basename` `dirname` `file` `sort` `printf` `true` `:` | `uniq` `tee` `cp` `mv` `mkdir` `touch` (they write to or create what an argument names, so a value would choose the path; they may stand elsewhere in the command, for example at the end of a pipeline) |
+
+   Each was read option by option, GNU and BSD/macOS variants; the audit is a table in
+   `shellsub.py`. Options that make a listed program run another program or write where an
+   argument says are refused anywhere in a command with a marker, abbreviations included:
+   `rg --pre`, `--pre-glob`, `--hostname-bin`; `sort --compress-program`, `-o`/`--output`,
+   `-T`, `--files0-from`, `--random-source`; `file -m`, `-C`, `-f`.
+   **`printf` only as `printf 'FORMAT' arguments...` with a literal format made of ordinary
+   text, `\n`, `\t`, `%%` and `%s`.** Any other conversion (`%d`, `%x`, `%c`, `%b`, a `*`
+   width) is refused: zsh evaluates the argument of a numeric conversion as arithmetic.
+   **`echo` is not on the list**: zsh and dash interpret backslashes in its arguments, so a
+   value would not arrive byte for byte; use `printf '%s\n'`.
+   **No network program is on the list** (`curl`, `wget`, `ssh`, `scp`, `rsync`, `nc`, `git`
+   ...), and no interpreter, shell, `sed`, `awk`, `jq`, `find`, `xargs`, `env`, `sudo`,
+   `make` or pager. An earlier version refused "programs known to run their arguments" and
+   accepted the rest; a review then ran a value through `perl5.36 -e`,
+   `git -c alias.x=!cmd` and `tar --checkpoint-action=exec=`. The set of programs that can
+   run an argument has no end, so the list is of programs that cannot.
+
+   **To use a real value with any other program**, Claude is told to write it to a file
+   with the Write tool (which restores markers locally) and let the program read the file.
+
+   You can extend the list with the setting `restore_programs_extra` (exact program names,
+   for example `["mytool"]`). **By adding a name you vouch that this program treats its
+   arguments as data**: the plugin checks nothing about it, including its options. The
+   setting is read only from `config.json` in the plugin's data directory and from the
+   environment variable `DATAFOG_RESTORE_PROGRAMS_EXTRA`, never from the project, and the
+   plugin refuses Claude's attempts to write that file. Shells, shell builtins and programs
+   that only run other programs (`env`, `sudo`, `xargs`, `ssh` ...) cannot be added.
 4. **A marker is a whole argument or sits inside a quoted argument**: `grep [[M]] f`,
    `grep '[[M]]' f`, `curl -H "Authorization: Bearer [[M]]" https://...`, `tool --to='[[M]]'`.
    Not a command name, not a redirection target, and not glued to unquoted text
@@ -197,9 +227,10 @@ double quotes by closing the quote, writing `'value'`, and opening it again.
 
 The refusal reason names no value. Claude is told to use a plain command with the marker
 as a whole or quoted argument, or to write the value to a file with the Write tool and let
-the command read the file. Compared with the previous version this refuses much that used
-to work: markers in `$( )`, backticks, heredocs, here-strings, assignments, `export`, `for`,
-`if`, `( )`, `{ }`, `$'...'`, next to a comment, or glued to other unquoted text.
+the command read the file. Compared with earlier versions this refuses much that used to
+work: markers in `$( )`, backticks, heredocs, here-strings, assignments, `export`, `for`,
+`if`, `( )`, `{ }`, `$'...'`, next to a comment, glued to other unquoted text, and with
+any program that is not on the list (`echo`, `curl`, `git`, `python`, `./script` ...).
 
 This is tested under real bash, zsh and dash: about 90 hostile values in each accepted
 context, 300 random values per context, the same through the real runner, every case from
@@ -211,9 +242,11 @@ broken grammars.
 
 Limits that no test removes:
 
-- **The lists of wrapping and code-reading programs are finite.** A program outside them
-  that treats an argument as code (a query language, a template, a pattern) gets the value
-  as one argument and may interpret it.
+- **The audit of the listed programs is a reading of their manuals**, for the versions
+  named in `shellsub.py`. A version or a local build with an option that runs a program
+  would not be covered. A listed program reads the file a value names (`cat [[M]]`); your
+  Read deny rules are applied to the value for that reason.
+- **A program you add with `restore_programs_extra` is your responsibility.**
 - **Shell start-up files** (`~/.zshenv`, `BASH_ENV`) that turn a program name into an alias
   or function are not modelled.
 - While the command runs, a program that was given the value has it in its argument list.
@@ -224,10 +257,12 @@ Grep and Glob patterns are always restored, through the tool input (see
 [Traces](#traces-left-in-claude-codes-records)). Note that match/no-match and match counts
 tell the model something about a value too.
 
-If a command with markers also looks like it sends data to another machine (`curl`, `wget`,
-`nc`, `scp`, `rsync`, `git push`, `gh`, `mail`, `dig`, `ping`, `open`, cloud CLIs, a URL in
-the command or in a value), you are asked even with `restore_in_bash: allow`, and with
-`egress_policy: deny` it is refused. This is a list of known programs, not a guarantee.
+Network programs are not on the list, so a command that gives a marker to `curl`, `wget`,
+`ssh`, `git push` and the like is refused, not asked about. If you add such a program with
+`restore_programs_extra`, or a value is itself a URL, the egress check still applies: a
+command with markers that looks like it sends data to another machine asks even with
+`restore_in_bash: allow`, and with `egress_policy: deny` it is refused. That check is a
+list of known programs and patterns, not a guarantee.
 
 ### Bash permissions
 
@@ -336,8 +371,11 @@ not a boundary around a file; a sandbox is.
 Before anything else the plugin asks one question about a command: is it **plain**? The
 definition is the grammar in [Markers in Bash commands](#markers-in-bash-commands), points
 1 and 2, with these differences for commands without markers: the builtins `echo`, `printf`,
-`true`, `false`, `:`, `pwd`, `test`, `kill`, `wait`, `type`, `which` and `exit` may be used,
-other programs are not restricted, and `cd`, `pushd` or `popd` is plain only as the single
+`true`, `false`, `:`, `pwd`, `test`, `kill`, `wait`, `type`, `which` and `exit` may be used
+(this says the command can be read with certainty, not that those builtins are harmless:
+`test -v` and `printf -v` evaluate an operand under bash, so a wildcard allow rule does not
+approve those forms), other programs are not restricted (the short program list applies
+to marker restoration only), a descriptor in a redirection is one digit, and `cd`, `pushd` or `popd` is plain only as the single
 command of a call (`cd sub` is plain; `cd sub && make` is not, because after it relative
 paths mean something else). Commands longer than 20,000 characters are not plain.
 
@@ -545,6 +583,9 @@ Design decisions that were considered and settled, so they are not reopened by a
   markers) or never approved (for permissions). More refusals and prompts are the accepted
   price. The alternative of restoring some markers and leaving others was rejected
   earlier: a command would run with a mix of real values and marker text.
+- **Programs that may receive a value are an allow-list, not a deny-list**, and every
+  program in the command must be on it. `echo` and all network programs are off it on
+  purpose. One user setting extends it; nothing the model can write does.
 - **Double quotes are closed and reopened around a value** instead of escaping the value
   for double quotes, so no character of a value is ever read under double-quote rules.
 - **Bash permissions follow your Claude Code rules, read from the settings files**, and
@@ -655,6 +696,7 @@ More settings go in `config.json` in the plugin's data directory
 | `restore_in_bash` | `DATAFOG_RESTORE_IN_BASH` | `ask` | Commands that contain markers: `ask` you first, `allow` (restore without asking), or `off` (never restore; markers stay as text). Values are put in by the runner, so this needs `bash_wrap: runner`. |
 | `background_bash` | `DATAFOG_BACKGROUND_BASH` | `deny` | `allow` wraps background commands like any other. |
 | `egress_policy` | `DATAFOG_EGRESS_POLICY` | `ask` | For commands with markers (and restoring not `off`) that look like they send data away: `ask`, `deny`, `allow`. |
+| `restore_programs_extra` | `DATAFOG_RESTORE_PROGRAMS_EXTRA` | none | Program names, in addition to the built-in list, that may receive real values in a Bash command. You vouch that each treats its arguments as data. Read from `config.json` and the environment only. See [Markers in Bash commands](#markers-in-bash-commands). |
 | `restore_in_mcp_input` | | `false` | Swap markers back in input to third-party MCP tools. Real values then leave this process. |
 | `recall_required` | `DATAFOG_RECALL_REQUIRED` | `true` | Stop when known-value matching is unavailable (see Limits). |
 | `max_scan_bytes` | `DATAFOG_MAX_SCAN_BYTES` | 5 MiB | Larger files count as "cannot be checked". |

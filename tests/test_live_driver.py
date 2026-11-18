@@ -74,13 +74,13 @@ def test_full_run_against_the_simulator():
                  "or the guard log"
         for case in ("L18-bash-marker-ask", "L19-bash-marker-allow", "L25-bash-nasty-value"):
             assert found[(case, strict)] == "PASS"
-        assert found[("L25-bash-nasty-value", "the program received exactly the hostile value, as one argument")] == "PASS"
+        assert found[("L25-bash-nasty-value", "the program received exactly the hostile value, as one argument (grep -cxF counted 1)")] == "PASS"
         assert found[("L22-bash-denied", "the hook denied it by the project's deny rule (step 2)")] == "PASS"
         assert found[("L26-bash-read-deny", "the command did not run")] == "PASS"
         assert found[("L27-bash-read-deny-directory", "the command did not run")] == "PASS"
         assert found[("L28-bash-read-deny-quoted-glob", "the command did not run")] == "PASS"
-        assert found[("L29-bash-marker-not-plain", "the hook refused to restore a marker in a command that is "
-                                                    "not plain")] == "PASS"
+        assert found[("L29-bash-marker-unlisted-program", "the hook refused to restore a marker for a program that "
+                                                           "is not on the list")] == "PASS"
         assert not os.path.exists(os.path.join(work, "project", "PWNED"))
 
 
