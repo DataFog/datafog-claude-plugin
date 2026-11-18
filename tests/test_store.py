@@ -258,6 +258,81 @@ def test_purge(box):
     assert box.open_vault().entry_counts() == {"EMAIL": 1}, "a new vault starts empty"
 
 
+def test_purge_does_not_follow_a_symlinked_vault_directory(box):
+    box.open_vault().tokenize(EMAIL)
+    alias = box.tmp / "alias"
+    alias.symlink_to(box.vault, target_is_directory=True)
+    with pytest.raises(VaultError):
+        EncryptedStore(str(alias), key_mode="file").purge()
+    assert (box.vault / "workspace.enc").exists() and (box.vault / "workspace.key").exists()
+
+
+def test_purge_unlinks_a_symlinked_legacy_directory_without_deleting_its_target(box):
+    box.open_vault().tokenize(EMAIL)
+    outside = box.tmp / "outside"
+    outside.mkdir()
+    document = outside / "important.txt"
+    document.write_text("synthetic data outside the vault")
+    (box.vault / "snapshots").symlink_to(outside, target_is_directory=True)
+    result = EncryptedStore(str(box.vault), key_mode="file").purge()
+    assert result["legacy"] is True
+    assert document.read_text() == "synthetic data outside the vault"
+    assert not (box.vault / "snapshots").is_symlink()
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_purge_refuses_a_linked_lock_file(box, link_kind):
+    box.open_vault().tokenize(EMAIL)
+    outside = box.tmp / "outside.txt"
+    outside.write_text("synthetic outside data")
+    lock = box.vault / "workspace.lock"
+    lock.unlink()
+    if link_kind == "symlink":
+        lock.symlink_to(outside)
+    else:
+        os.link(outside, lock)
+    with pytest.raises(VaultError):
+        EncryptedStore(str(box.vault), key_mode="file").purge()
+    assert outside.read_text() == "synthetic outside data"
+    assert (box.vault / "workspace.enc").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can unlink files in a read-only directory")
+def test_purge_reports_a_deletion_failure_and_preserves_the_key(box):
+    out, _ = box.open_vault().tokenize(EMAIL)
+    box.vault.chmod(0o500)
+    try:
+        with pytest.raises(VaultError) as caught:
+            EncryptedStore(str(box.vault), key_mode="file").purge()
+        assert caught.value.code == "purge_failed"
+        assert (box.vault / "workspace.enc").exists() and (box.vault / "workspace.key").exists()
+    finally:
+        box.vault.chmod(0o700)
+    assert box.open_vault().restore(out).text == EMAIL
+
+
+def test_purge_holds_the_vault_lock_until_key_removal_finishes(box, monkeypatch):
+    from datafog_guard import store
+    box.open_vault().tokenize(EMAIL)
+    envelope = box.vault / "workspace.enc"
+    raw = bytearray(envelope.read_bytes())
+    raw[13 + raw[12] + 56] = 1      # a credential-store envelope; purge needs no working key
+    envelope.write_bytes(raw)
+    calls = []
+
+    def remove_key(account):
+        assert not envelope.exists()
+        with pytest.raises(VaultLocked):
+            with FileLock(str(box.vault / "workspace.lock"), timeout=0.01):
+                pass
+        calls.append(account)
+        return True
+
+    monkeypatch.setattr(store, "remove_keystore_entry", remove_key)
+    result = EncryptedStore(str(box.vault), key_mode="file").purge()
+    assert result["keystore"] == "removed" and calls == [result["account"]]
+
+
 def test_purge_under_a_long_lived_process(box):
     """The MCP server keeps its vault object: after a purge by another process it sees the new vault."""
     server = box.open_vault()

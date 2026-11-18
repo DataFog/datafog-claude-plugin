@@ -1,29 +1,32 @@
 # DataFog for Claude Code
 
-Keeps personal data and credentials out of the model's context in Claude Code during
-normal work.
+DataFog replaces detected personal data and credentials with markers before Claude sees
+files and command output. Claude can work with `[[EMAIL_7KQ4ZM]]` instead of your email;
+when it writes a marker back, the plugin restores the value on your Mac or Linux machine.
+Detection is local. The encrypted vault stays on your machine, with its key in the macOS
+Keychain or Linux Secret Service by default.
 
-**What this is for, and what it is not.** DataFog protects against *accidental* exposure:
-values that would otherwise reach the model and the model provider simply because Claude
-read a file, ran a command or called a tool while doing its job. It is **not a sandbox
-against a model that is actively trying to unmask values.** A model that has been
-manipulated (for example by a prompt injection in a file it read) and is allowed to run
-commands can recover values: by transforming them so the detector no longer recognises
-them, by cutting them into pieces, or by going around the output filter with operating
-system facilities. If you need protection against that, you need an OS-level sandbox and
-strict permission rules; this plugin does not replace them.
+It protects against accidental exposure during everyday coding. It does not stop a
+malicious or manipulated agent from recovering data through commands, encodings or other
+operating-system access. Use a sandbox and permission rules for that boundary.
 
-Before Claude sees the content of a file, the output of a command or the result of a
-tool, DataFog replaces the values it detects with reversible markers such as
-`[[EMAIL_7KQ4ZM]]`. When Claude writes a marker back to a file or a command, the
-marker is swapped for the real value on your machine. The table that maps markers to
-values (the vault) never leaves your machine and is never shown to the model.
+| Coverage group | What happens | Main limit |
+| :- | :- | :- |
+| Checked before Claude sees it | Readable text files, Bash stdout/stderr, submitted prompts and `@file` mentions are checked; detected values become markers, or the request is blocked. | Only recognised values are covered. Prompts cannot be rewritten automatically. |
+| Filtered after a tool returns | Grep, web tools, MCP tools and subagent results have detected values replaced. The vault and detector are checked before the call. | A crash or timeout after that check can leave raw output visible to Claude. |
+| Outside that protection | Free-text names, unlabelled addresses, unknown secret formats, images/PDFs and data sent directly by a command are not reliably protected. | Write/Edit and Grep/Glob marker restoration put real values in Claude Code's local transcript. |
 
-**Status: 0.2.0-dev. Not released.** The design rests on a 31-run spike against
-Claude Code 2.1.299, and the engine has an automated test suite, but this build has
-not yet been run in a live Claude Code session, and its use of the macOS Keychain has not
-been run on a Mac at all. [What is not verified yet](#not-verified-yet)
-lists every such point. Read [Known gaps](#known-gaps) before you rely on it.
+The default detector covers email, phone, SSN, card numbers and selected credential and
+labelled account formats. **People's names are not detected. Street addresses are off by
+default and require a label when enabled.** This is not a complete secret scanner.
+
+**Supported platforms:** macOS 11+ on Apple Silicon; Linux x86_64 with glibc 2.38+.
+Linux needs a working Secret Service, or an explicit, weaker file-key setting. Intel Macs,
+Linux ARM/musl/older glibc and Windows are unsupported. Unsupported machines and unavailable
+key stores block tool calls. See [Supported machines](#supported-machines) for details.
+
+**Status: 0.2.0 release candidate; validation in progress.** See [Known gaps](#known-gaps) and
+[Not verified yet](#not-verified-yet) before relying on it.
 
 ## Requirements
 
@@ -136,6 +139,15 @@ the value). Digits written directly onto an address with no separator
 
 Markers sent to WebFetch, WebSearch, subagents and third-party MCP tools are **not**
 swapped back: that input leaves your machine or goes to another model.
+
+### Names and street addresses
+
+Adding these is worthwhile: names and ordinary mailing addresses are a large gap in
+free-text documents. The decision for this release is to keep the current rule scanner
+and make a future local name/address model an explicit opt-in. Name-shaped regular
+expressions would also hide code identifiers and ordinary prose; a model needs its own
+coverage, false-positive and hook-latency checks before it becomes a default. Enabling
+`STREET_ADDRESS` today only adds the labelled formats core already recognises.
 
 ### How Bash commands run
 
@@ -416,8 +428,10 @@ definition is the grammar in [Markers in Bash commands](#markers-in-bash-command
 1 and 2, with these differences for commands without markers: the builtins `echo`, `printf`,
 `true`, `false`, `:`, `pwd`, `test`, `kill`, `wait`, `type`, `which` and `exit` may be used
 (this says the command can be read with certainty, not that those builtins are harmless:
-`test -v` and `printf -v` evaluate an operand under bash, so a wildcard allow rule does not
-approve those forms), other programs are not restricted (the short program list applies
+`test -v` and `printf -v` can evaluate an operand under bash; numeric `printf` formats,
+dynamic format widths and non-numeric `exit` arguments can do so under zsh. These forms
+require an exact allow rule when no restrictive rule exists, and force a prompt whenever
+a deny, ask or path rule applies (`dontAsk` denies)), other programs are not restricted (the short program list applies
 to marker restoration only), a descriptor in a redirection is one digit, and `cd`, `pushd` or `popd` is plain only as the single
 command of a call (`cd sub` is plain; `cd sub && make` is not, because after it relative
 paths mean something else). Commands longer than 20,000 characters are not plain.
@@ -820,6 +834,9 @@ files. `/datafog:status` and `/datafog:doctor` say so when they are still there,
 
 **Limits of the vault library (core 1.7.0) worth knowing:**
 
+[Core issue #275](https://github.com/DataFog/datafog-core/issues/275) tracks lookup,
+counts, deletion with key removal, read performance, lock timeout and parent-folder support.
+
 - **Every directory above the vault must be listable by you**, not only passable. On a
   shared Linux machine where `/home` has mode 0711 the vault cannot be opened
   (`vault_unreadable`). Put the vault elsewhere with `DATAFOG_VAULT_DIR`.
@@ -858,6 +875,14 @@ was not measured** (no Mac was available for this build); the optional live case
   libraries, the vault (permissions, lock, key, decryption), leftovers of a development
   build, the Bash filter, your permission rules.
 - `/datafog:purge` deletes the vault and its key after an explicit confirmation step.
+
+### Distribution
+
+Version 0.2.0 is distributed directly from this repository. A public plugin-directory
+submission is deferred until the interactive approval and permission-prompt paths listed
+below have been checked; the automated live run uses headless Claude Code. Anthropic now
+accepts submissions through its [directory portal](https://claude.ai/directory/manage),
+not pull requests to its [official plugin repository](https://github.com/anthropics/claude-plugins-official).
 
 ## Configuration
 

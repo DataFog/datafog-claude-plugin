@@ -78,6 +78,20 @@ EDIT_TOOL = "mcp__plugin_datafog_guard__edit_with_markers"
 STATUS_TOOL = "mcp__plugin_datafog_guard__protection_status"
 TOL = " If a tool is unavailable or a call is denied, say so plainly and continue with the rest."
 
+
+def key_store_entry_state(account):
+    """Check only whether this entry exists; send any secret output straight to /dev/null."""
+    if sys.platform == "darwin":
+        argv = ["/usr/bin/security", "find-generic-password", "-s", "DataFog.ApplicationVault.v1", "-a", account]
+        missing_code = 44
+    elif sys.platform.startswith("linux") and shutil.which("secret-tool"):
+        argv = ["secret-tool", "lookup", "service", "DataFog.ApplicationVault.v1", "username", account]
+        missing_code = 1
+    else:
+        return "unavailable"
+    result = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    return "present" if result.returncode == 0 else "absent" if result.returncode == missing_code else "unavailable"
+
 # The synthetic values planted in the fixtures. None may ever reach the model.
 SENTINELS = {
     "EMAIL ada": "ada.synthetic@example.com", "EMAIL user02": "user02.synthetic@example.com",
@@ -906,6 +920,7 @@ class Driver:
         python = self.engine_python()
         engine = os.path.join(REPO, "engine", "run.py")
         checks = []
+        account = None
 
         def engine_run(*argv, stdin=b""):
             started = time.time()
@@ -915,6 +930,8 @@ class Driver:
 
         def hook(payload):
             result, seconds = engine_run("hook", stdin=json.dumps(payload).encode())
+            if result.returncode:
+                raise RuntimeError("hook exited with code %d" % result.returncode)
             try:
                 return json.loads(result.stdout or b"null"), seconds
             except ValueError:
@@ -925,6 +942,15 @@ class Driver:
             checks.append(("first start creates the vault and its key store entry without failing",
                            "PASS" if "DataFog guard: on" in line and "system key store" in line else "FAIL",
                            "%.1f s (includes any Keychain prompt you had to answer); %s" % (seconds, line[:160])))
+            with open(os.path.join(vault, "workspace.enc"), "rb") as handle:
+                header = handle.read(512)
+            end = 13 + header[12]
+            if header[:8] != b"DFAPP001" or header[13:end] != b"claude-code" or len(header) < end + 57 \
+                    or header[end + 56] != 1:
+                raise RuntimeError("the vault has no credential-store envelope")
+            account = "claude-code/" + header[end:end + 16].hex()
+            checks.append(("the new vault's key store entry exists", "PASS" if
+                           key_store_entry_state(account) == "present" else "FAIL", ""))
             status, _ = engine_run("status")
             text = status.stdout.decode(errors="replace")
             checks.append(("status reports the key store as the key's home", "PASS" if "key is in the operating "
@@ -940,10 +966,12 @@ class Driver:
             checks.append(("a second process opens the vault with the stored key and tokenizes",
                            "PASS" if "[[EMAIL_" in stdout and email not in stdout else "FAIL", ""))
             timings = []
+            same = bool(MARKER.search(stdout))
             for _ in range(15):
                 again, seconds = hook(post)
                 timings.append(seconds)
-                same = ((again or {}).get("hookSpecificOutput") or {}).get("updatedToolOutput", {}).get("stdout") == stdout
+                same = same and (((again or {}).get("hookSpecificOutput") or {}).get(
+                    "updatedToolOutput", {}).get("stdout") == stdout)
             timings.sort()
             checks.append(("fifteen more hook processes get the same marker (no prompt each time?)",
                            "PASS" if same else "FAIL", ""))
@@ -955,11 +983,16 @@ class Driver:
         except Exception as error:
             checks.append(("the key store case ran to the end", "FAIL", "%r" % (error,)))
         finally:
-            purge, _ = engine_run("purge", "--confirm", "DELETE-VAULT")
-            text = purge.stdout.decode(errors="replace")
-            checks.append(("purge removed the vault and its key store entry",
-                           "PASS" if "key was removed from the operating system's key store" in text else "FAIL",
-                           text.strip().replace("\n", " ")[:300]))
+            try:
+                purge, _ = engine_run("purge", "--confirm", "DELETE-VAULT")
+                text = purge.stdout.decode(errors="replace")
+                removed = purge.returncode == 0 and not os.path.lexists(os.path.join(vault, "workspace.enc")) \
+                    and not os.path.lexists(os.path.join(vault, "workspace.key"))
+                checks.append(("purge removed the vault and its key store entry", "PASS" if removed and account
+                               and key_store_entry_state(account) == "absent" else "FAIL",
+                               text.strip().replace("\n", " ")[:300]))
+            except Exception as error:
+                checks.append(("purge removed the vault and its key store entry", "FAIL", "%r" % (error,)))
         self.report.append(("L28-keychain", title, checks, None))
         for name, status, detail in checks:
             if status == "FAIL":

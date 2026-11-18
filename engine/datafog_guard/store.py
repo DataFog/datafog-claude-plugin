@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import time
 
 from . import APP_ID
@@ -197,6 +198,10 @@ def read_envelope_header(directory: str) -> dict | None:
             head = handle.read(512)
     except OSError:
         return None
+    return _parse_envelope_header(head)
+
+
+def _parse_envelope_header(head: bytes) -> dict:
     try:
         if head[:8] != b"DFAPP001":
             return {"state": "vault_unsupported"}
@@ -547,33 +552,83 @@ class EncryptedStore:
         """
         result: dict = {"existed": False, "legacy": False, "keystore": "none", "account": ""}
         self.close()
-        if not os.path.isdir(self.directory):
-            return result
-        header = read_envelope_header(self.directory)
-        with FileLock(os.path.join(self.directory, LOCK_FILE), self.lock_timeout):
-            result["existed"] = self.exists()
-            for name in (ENVELOPE, KEY_FILE, INDEX_FILE, "bash-restore.key"):   # the data first
-                try:
-                    os.unlink(os.path.join(self.directory, name))
-                except OSError:
-                    pass
-            result["legacy"] = legacy_plain_store(self.directory)
-            snapshots = os.path.join(self.directory, "snapshots")
+        directory_fd = None
+        lock_fd = None
+        try:
             try:
-                for name in os.listdir(snapshots):
-                    os.unlink(os.path.join(snapshots, name))
-                os.rmdir(snapshots)
-            except OSError:
+                directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                return result
+            info = os.fstat(directory_fd)
+            if info.st_uid != os.geteuid():
+                raise VaultError("the vault directory belongs to another user", "vault_insecure")
+            lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                              0o600, dir_fd=directory_fd)
+            info = os.fstat(lock_fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+                raise VaultError("the vault lock is not a safe regular file", "vault_insecure")
+            _flock(lock_fd, self.lock_timeout)
+            header = None
+            try:
+                info = os.stat(ENVELOPE, dir_fd=directory_fd, follow_symlinks=False)
+                result["existed"] = True
+                if stat.S_ISREG(info.st_mode):
+                    fd = os.open(ENVELOPE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+                    try:
+                        if not stat.S_ISREG(os.fstat(fd).st_mode):
+                            raise VaultError("the vault file is not a regular file", "vault_insecure")
+                        header = _parse_envelope_header(os.read(fd, 512))
+                    finally:
+                        os.close(fd)
+            except FileNotFoundError:
+                pass
+
+            def remove_file(name: str, parent: int = directory_fd) -> None:
+                try:
+                    os.unlink(name, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
+
+            for name in (ENVELOPE, KEY_FILE, INDEX_FILE, "bash-restore.key"):   # the data first
+                remove_file(name)
+            try:
+                info = os.stat("snapshots", dir_fd=directory_fd, follow_symlinks=False)
+                result["legacy"] = True
+                if stat.S_ISDIR(info.st_mode):
+                    snapshots_fd = os.open("snapshots", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                           dir_fd=directory_fd)
+                    try:
+                        for name in os.listdir(snapshots_fd):
+                            remove_file(name, snapshots_fd)
+                        os.fsync(snapshots_fd)
+                    finally:
+                        os.close(snapshots_fd)
+                    os.rmdir("snapshots", dir_fd=directory_fd)
+                else:
+                    remove_file("snapshots")
+            except FileNotFoundError:
                 pass
             for name in ("HEAD", "meta.json", "lock"):
                 try:
-                    os.unlink(os.path.join(self.directory, name))
-                except OSError:
+                    os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    result["legacy"] = True
+                except FileNotFoundError:
                     pass
-        if header and header.get("protection") == "credential_store" and header.get("vault_id"):
-            result["account"] = f"{header.get('app_id')}/{header['vault_id']}"
-            result["keystore"] = "removed" if remove_keystore_entry(result["account"]) else "left"
-        return result
+                remove_file(name)
+            os.fsync(directory_fd)
+            if header and header.get("protection") == "credential_store" and header.get("app_id") == APP_ID \
+                    and header.get("vault_id"):
+                result["account"] = f"{APP_ID}/{header['vault_id']}"
+                result["keystore"] = "removed" if remove_keystore_entry(result["account"]) else "left"
+            return result
+        except OSError as error:
+            raise VaultError("the vault could not be fully deleted; check its directory and file permissions",
+                             "purge_failed") from error
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
+            if directory_fd is not None:
+                os.close(directory_fd)
 
 
 def remove_keystore_entry(account: str) -> bool:

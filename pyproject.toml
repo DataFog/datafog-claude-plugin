@@ -1,6 +1,6 @@
 [project]
 name = "datafog-guard"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "Engine of the DataFog Claude Code plugin"
 requires-python = ">=3.10"
 license = "Apache-2.0"

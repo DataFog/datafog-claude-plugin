@@ -49,6 +49,33 @@ def test_purge_needs_the_confirmation_word(box):
     assert_no_sentinel(text_of(first) + text_of(done))
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can unlink files in a read-only directory")
+def test_purge_command_fails_when_the_vault_cannot_be_deleted(box):
+    marker = box.open_vault().tokenize(EMAIL)[0]
+    box.vault.chmod(0o500)
+    try:
+        result = box.run("purge", "--confirm", "DELETE-VAULT")
+        assert result.returncode == 1 and "could not be deleted" in text_of(result)
+        assert "The vault was deleted." not in text_of(result)
+        assert (box.vault / "workspace.enc").exists() and (box.vault / "workspace.key").exists()
+    finally:
+        box.vault.chmod(0o700)
+    assert box.open_vault().restore(marker).text == EMAIL
+
+
+def test_purge_command_fails_when_the_key_store_entry_remains(box, monkeypatch, capsys):
+    from datafog_guard import cli, engine
+    from datafog_guard.store import EncryptedStore
+    settings = load(monkeypatch, box.tmp, DATAFOG_DATA_DIR=str(box.data), DATAFOG_VAULT_DIR=str(box.vault))
+    monkeypatch.setattr(config, "load", lambda: settings)
+    store = EncryptedStore(str(box.vault), key_mode="file")
+    monkeypatch.setattr(engine, "open_store", lambda settings: store)
+    monkeypatch.setattr(store, "purge", lambda: {"existed": True, "legacy": False, "keystore": "left",
+                                               "account": "claude-code/synthetic-test-account"})
+    assert cli.purge(["--confirm", "DELETE-VAULT"]) == 1
+    assert "key could not be removed" in capsys.readouterr().out
+
+
 def test_doctor_reports_each_check_and_fails_on_a_broken_vault(box):
     out = text_of(box.run("doctor"))
     for line in ("[ok  ] Python 3.10 or later", "[ok  ] detector library", "[ok  ] tokenize and restore round trip",
@@ -150,7 +177,7 @@ def test_every_hook_entry_blocks_on_failure_and_uses_the_launcher():
 
 def test_manifests():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["name"] == "datafog" and plugin["version"] == "0.2.0-dev"
+    assert plugin["name"] == "datafog" and plugin["version"] == "0.2.0"
     options = plugin["userConfig"]
     assert options["keep_vault_on_uninstall"]["type"] == "boolean" and options["keep_vault_on_uninstall"]["default"] is True
     assert options["unscannable_file_policy"]["options"] == ["ask", "deny", "allow"]

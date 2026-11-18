@@ -5,7 +5,7 @@ Values found in tool output are replaced by reversible markers such as
 to the real values locally when the agent writes.
 """
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.2.0"
 
 # The detector. 1.5.0 and 1.6.0 have an email-detection regression (core #266); 1.7.0 fixed it.
 CORE_REQUIREMENT = "datafog-core>=1.7.0,<1.8"

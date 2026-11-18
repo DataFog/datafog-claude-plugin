@@ -11,7 +11,7 @@
     {
       "name": "datafog",
       "source": "./",
-      "description": "Replaces personal data and credentials with reversible markers before the model sees them. Development build (0.2.0-dev)."
+      "description": "Replaces personal data and credentials with reversible markers before the model sees them."
     }
   ]
 }

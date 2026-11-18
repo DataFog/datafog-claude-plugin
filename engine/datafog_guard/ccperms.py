@@ -398,7 +398,7 @@ def managed_dirs() -> list[str]:
 
 def config_home(env=None) -> str:
     env = os.environ if env is None else env
-    return env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return env.get("CLAUDE_CONFIG_DIR") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".claude")
 
 
 def _salvage(text: str, rules: RuleSet, source: str, source_dirs: list[str] | None = None) -> None:
@@ -949,6 +949,33 @@ def is_simple(command: str, markers=()) -> bool:
 
 
 _TEST_EVALUATES = frozenset({"-v", "-R", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-o", "-a"})
+_PRINTF_TEXT_FORMAT = re.compile(r"(?:[^%]|%%|%[-+ #0]*[0-9]*(?:\.[0-9]+)?[sbq])*")
+_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def builtin_evaluates(words: list[str]) -> bool:
+    """Whether a nominally literal builtin can interpret an operand as shell arithmetic.
+
+    In zsh, `printf %d 'path[$(cmd)]'` and `exit 'path[$(cmd)]'` execute cmd even though
+    the shell parser sees a single-quoted argument. Plain grammar alone cannot clear them
+    against deny/ask rules. Numeric literals and printf text conversions do not evaluate code.
+    """
+    if not words:
+        return False
+    name, arguments = os.path.basename(words[0]), words[1:]
+    if name == "test":
+        return any(word in _TEST_EVALUATES for word in arguments)
+    if name == "exit":
+        return any(not _NUMBER.fullmatch(word) for word in arguments)
+    if name != "printf":
+        return False
+    if any(word.startswith("-v") for word in arguments):
+        return True
+    if arguments[:1] == ["--"]:
+        arguments = arguments[1:]
+    if not arguments or _PRINTF_TEXT_FORMAT.fullmatch(arguments[0]):
+        return False
+    return any(not _NUMBER.fullmatch(word) for word in arguments[1:])
 
 
 def allow_rule_for(rules: RuleSet, command: str, exact_only: bool = False) -> Rule | None:
@@ -961,10 +988,9 @@ def allow_rule_for(rules: RuleSet, command: str, exact_only: bool = False) -> Ru
     # an exact-match rule for the full command string". STRICTER: the same for every wrapper, including
     # the ones Claude Code strips (the docs do not say whether the unstripped text is matched as well),
     # for shells and eval, and for a command name that is quoted or escaped.
-    # `test -v 'x[$(cmd)]'`, an arithmetic operand of test, and `printf -v 'x[$(cmd)]'` make bash evaluate
-    # the operand. Claude Code's own wildcard rule would approve them; STRICTER: only an exact rule does here.
-    evaluates = (name == "test" and any(plain in _TEST_EVALUATES for _, plain in words[1:])) or \
-        (name == "printf" and any(plain.startswith("-v") for _, plain in words[1:]))
+    # Some builtins evaluate even single-quoted operands as arithmetic. STRICTER: without a
+    # restrictive rule only an exact allow rule can approve them; with one the caller asks firmly.
+    evaluates = builtin_evaluates([plain for _, plain in words])
     needs_exact = exact_only or evaluates or not unquoted or name in WRAPPERS or name in SHELLS or name == "eval" or \
         name in ("watch", "setsid", "ionice", "flock") or \
         (name == "find" and any(plain in _FIND_ACTIONS for _, plain in words[1:]))
@@ -1304,6 +1330,12 @@ def decide(command: str, rules: RuleSet, *, mode: str = "default", markers: str 
     if markers and egress:
         return ask(5, f"DataFog: this command would run with real values ({markers}) and looks like it sends data "
                       "to another machine.")
+    if parsed is not None and any(builtin_evaluates([word.text for word in simple.words])
+                                  for simple in parsed.commands) \
+            and (rules.deny or rules.ask or rules.paths or rules.block_outside_reads):
+        return ask(6, "DataFog: a shell builtin can evaluate an operand as arithmetic, including commands "
+                      "inside a quoted argument, so the plugin cannot clear it against your deny or ask "
+                      "rules. It is not approved without a prompt in any permission mode.", firm=True)
     unsupported = [rule for rule in rules.paths if rule.unsupported]
     if parsed is None:
         # Never allow, never "no decision" while a rule exists the plugin could be misreading the command

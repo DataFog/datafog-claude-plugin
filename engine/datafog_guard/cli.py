@@ -99,7 +99,13 @@ def purge(argv: list[str]) -> int:
         return 1
     try:
         result = store.purge()
-        shutil.rmtree(settings.shadow_dir, ignore_errors=True)
+        if os.path.islink(settings.shadow_dir):
+            os.unlink(settings.shadow_dir)
+        else:
+            try:
+                shutil.rmtree(settings.shadow_dir)
+            except FileNotFoundError:
+                pass
     except Exception as error:
         print(f"The vault could not be deleted ({_problem(error)}).")
         return 1
@@ -113,7 +119,7 @@ def purge(argv: list[str]) -> int:
         print(f"vault file is gone. To remove it by hand, delete the entry with service \"{KEYSTORE_SERVICE}\"")
         print(f"and account \"{result['account']}\" (macOS: Keychain Access; Linux: Seahorse or secret-tool).")
     print("Markers issued before now can no longer be restored. A new, empty vault is created on next use.")
-    return 0
+    return 1 if result["keystore"] == "left" else 0
 
 
 def _claude_version() -> tuple[int, ...] | None:
