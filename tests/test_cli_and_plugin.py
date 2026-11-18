@@ -258,15 +258,17 @@ def test_engine_has_no_third_party_imports_besides_core_and_its_vault():
                 assert name.split(".")[0] in allowed, f"{path.name} imports {name}"
 
 
-def test_hook_start_up_does_not_import_heavy_modules(box):
-    code = ("import sys, io, json\n"
+def test_hook_start_up_does_not_import_unrelated_heavy_modules(box):
+    code = ("import sys, io, json, importlib.metadata\n"
+            "importlib.metadata.version('datafog-core')\n"
+            # Metadata checking uses email/urllib, and socket on Python 3.10/3.12.
+            # Compare with that actual stdlib baseline rather than interpreter-specific exceptions.
+            "metadata_imports = {name.split('.')[0] for name in sys.modules}\n"
             "sys.stdin = io.StringIO(json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': 'Glob', 'tool_input': {}}))\n"
             "from datafog_guard import hook\nhook.main()\n"
-            # importlib.metadata uses email and urllib.parse for reviewed-version checks;
-            # network clients, subprocesses and other unrelated subsystems stay unloaded.
-            "heavy = {'subprocess', 'asyncio', 'http', 'ssl', 'socket', 'logging', 'argparse',"
+            "heavy = {'subprocess', 'asyncio', 'http', 'urllib', 'email', 'ssl', 'socket', 'logging', 'argparse',"
             " 'multiprocessing', 'concurrent', 'unittest', 'xml', 'sqlite3', 'ctypes'}\n"
-            "print(sorted(heavy & {name.split('.')[0] for name in sys.modules}))\n")
+            "print(sorted(heavy & ({name.split('.')[0] for name in sys.modules} - metadata_imports)))\n")
     import sys
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=box.env())
     assert result.stdout.strip().endswith("[]"), result.stdout + result.stderr
