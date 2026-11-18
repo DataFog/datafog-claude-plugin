@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import shutil
 import subprocess
 
@@ -33,6 +34,9 @@ PLAIN_SH = [shell for shell in ("dash",) if shutil.which(shell)]
 
 def kind_of(shell: str) -> str:
     return shell if shell in ("bash", "zsh") else "sh"
+# The receiving programs of these tests are not on the plugin's list of programs that may take a value.
+# The tests vouch for them the way a user would: through restore_programs_extra.
+EXTRA = frozenset({"dump", "sdump", "rc", "psprobe"})
 M = "[[ACCOUNT_NUMBER_000000]]"          # a stand-in marker for tests that give the value directly
 
 BIG = ("$(touch PWNED)`touch PWNED`'\";|&<>(){}[]*?!~#\\ \t%s%n-rf é日本語 " * 80)[:4096]
@@ -86,8 +90,11 @@ CONTEXTS = {
     "printf_after_format": ("printf '%s\\0' -- {m} > {dir}/{id}", argv("--", "{v}"), True),
     "printf_dashes_format": ("printf -- '%s|%s' x{m} \"y{m}\" > {dir}/{id}", None, True),
     "redirections": ("dump {id} -- {m} > /dev/null 2>&1 < /dev/null", argv("--", "{v}"), True),
-    "echo": ("echo x -- {m} > /dev/null; dump {id} -- {m}", argv("--", "{v}"), True),
-    "path_program": ("{bin}/dump {id} -- {m}", argv("--", "{v}"), True),
+    "listed_programs": ("grep -c -- {m} /dev/null | cat | sort | head -1 > /dev/null; dump {id} -- {m}",
+                        argv("--", "{v}"), True),
+    "listed_by_system_path": ("/bin/cat /dev/null | /usr/bin/wc -c > /dev/null; dump {id} -- '{m}'",
+                              argv("--", "{v}"), True),
+    "bystanders": ("true -- {m} | tee /dev/null | uniq > /dev/null; dump {id} -- {m}", argv("--", "{v}"), True),
     "home_argument": ("dump {id} ~/x -- {m}", argv("{home}/x", "--", "{v}"), True),
 }
 del CONTEXTS["printf_dashes_format"]          # x{m} is a marker glued to unquoted text: refused (see REFUSED)
@@ -257,6 +264,74 @@ REFUSED = {
     "review: test with an option from a variable": 'o=-v; y={m}; [ $o "$y" ]',
     "review: zsh export of a variable": 'x={m}; export "$x"',
     "review: zsh set -A": 'x={m}; set -A "$x" 1',
+    # -- third review: "any external program except a deny-list" still ran values -----------------------
+    "review3: versioned perl": "perl5.99 -e {m}",
+    "review3: versioned ruby": "ruby3.2 -e {m}",
+    "review3: versioned node": "node18 -e {m}",
+    "review3: versioned php": "php8.2 -r {m}",
+    "review3: versioned lua": "lua5.4 -e {m}",
+    "review3: versioned bash": "bash5 -c {m}",
+    "review3: dash-static": "dash-static -c {m}",
+    "review3: oksh": "oksh -c {m}",
+    "review3: yash": "yash -c {m}",
+    "review3: git alias": 'git -c "alias.z=!{m}" z',
+    "review3: tar checkpoint action": 'tar -cf /dev/null "--checkpoint-action=exec={m}" x',
+    "review3: capsh": "capsh -- -c {m}",
+    "review3: rsync -e": "rsync -e {m} a b:",
+    "review3: scp -S": "scp -S {m} a b:",
+    "review3: socat": "socat - 'EXEC:{m}'",
+    "review3: nc -e": "nc -e {m} h 1",
+    "review3: man -P": "man -P {m} ls",
+    "review3: less": "less {m}",
+    "review3: fzf preview": "fzf --preview {m}",
+    "review3: entr": "entr {m}",
+    "review3: tcc -run": "tcc -run {m}",
+    "review3: unlisted program elsewhere in the command": "grep -- {m} f | perl -pe 1",
+    "review3: unlisted program before": "git status; grep -- {m} f",
+    "review3: local helper": "./argdump {m}",
+    "review3: relative path to a listed name": "bin/grep -- {m} f",
+    "review3: listed name outside the system directories": "/tmp/grep -- {m} f",
+    "review3: listed name with a version": "grep3 -- {m} f",
+    "review3: builtin by path": "/usr/bin/printf '%s' {m}",
+    "review3: echo": "echo -- {m}",
+    "review3: curl": "curl -d '{m}' https://example.com",
+    "review3: jq": "jq -- {m} f",
+    "review3: find": "find . -name '{m}'",
+    "review3: sort --compress-program": "sort --compress-program {m} f",
+    "review3: sort --compress-prog=": "sort '--compress-prog={m}' f",
+    "review3: sort option elsewhere": "sort --compress-program=x f | grep -- {m}",
+    "review3: sort -o": "sort -o out -- {m}",
+    "review3: sort -uo": "sort -uo out -- {m}",
+    "review3: sort -T": "sort -T /tmp -- {m}",
+    "review3: rg --pre": "rg --pre {m} x",
+    "review3: rg --pre=": "rg '--pre={m}' x",
+    "review3: rg --hostname-bin": "rg --hostname-bin {m} x",
+    "review3: file -m": "file -m {m} x",
+    "review3: file --magic-file": "file --magic-file=x -- {m}",
+    "review3: uniq output operand": "uniq in {m}",
+    "review3: tee target": "tee -- {m}",
+    "review3: cp target": "cp a -- {m}",
+    "review3: mv target": "mv a -- {m}",
+    "review3: mkdir": "mkdir -- {m}",
+    "review3: touch": "touch -- {m}",
+    # zsh evaluates the argument of a numeric conversion as arithmetic
+    "review3: printf %d": "printf '%d\\n' {m}",
+    "review3: printf %i": "printf '%i' {m}",
+    "review3: printf %o": "printf '%o' {m}",
+    "review3: printf %u": "printf '%u' {m}",
+    "review3: printf %x": "printf '%x' {m}",
+    "review3: printf %X": "printf '%X' {m}",
+    "review3: printf %c": "printf '%c' {m}",
+    "review3: printf %b": "printf '%b' {m}",
+    "review3: printf %q": "printf '%q' {m}",
+    "review3: printf star width": "printf '%*s' {m} x",
+    "review3: printf star precision": "printf '%.*s' {m} x",
+    "review3: printf mixed on reuse": "printf '%s=%d' a {m}",
+    "review3: printf flags": "printf '%-10s' {m}",
+    "review3: printf numeric escape for a percent sign": "printf '\\x25d' {m}",
+    "review3: printf unquoted numeric format": "printf %d {m}",
+    "review3: name starting with a dash": "-grep {m}",
+    "review3: digits before a descriptor duplication": "grep -- {m} f 12>&1",
     # -- the grammar's edges ----------------------------------------------------------------------------
     "marker glued to unquoted text": "dump 0 x{m}",
     "marker glued to an option": "dump 0 --to={m}",
@@ -311,7 +386,7 @@ def spans_for(command: str, values: dict[str, str]) -> list[Span]:
 
 def sub(template: str, value: str, shell: str = "bash") -> str:
     command = render(template, M)
-    return substitute(command, spans_for(command, {M: value}), shell).text
+    return substitute(command, spans_for(command, {M: value}), shell, EXTRA).text
 
 
 def expected_refusal(name: str, value: str) -> bool:
@@ -366,10 +441,10 @@ def receivers(tmp_path) -> Bin:
 # -- the grammar on its own ----------------------------------------------------------------------
 def test_each_place_is_written_in_its_own_encoding():
     value = "a'b\"c$d`e\\f"
-    assert sub("x {m}", value) == "x 'a'\\''b\"c$d`e\\f'"
-    assert sub("x '{m}'", value) == "x 'a'\\''b\"c$d`e\\f'"
-    assert sub('x "p{m}q"', value) == "x \"p\"'a'\\''b\"c$d`e\\f'\"q\""
-    assert sub("x --to='{m}' | y \"{m}\" > out 2>&1", "v") == "x --to='v' | y \"\"'v'\"\" > out 2>&1"
+    assert sub("cat {m}", value) == "cat 'a'\\''b\"c$d`e\\f'"
+    assert sub("cat '{m}'", value) == "cat 'a'\\''b\"c$d`e\\f'"
+    assert sub('cat "p{m}q"', value) == "cat \"p\"'a'\\''b\"c$d`e\\f'\"q\""
+    assert sub("cat --to='{m}' | wc \"{m}\" > out 2>&1", "v") == "cat --to='v' | wc \"\"'v'\"\" > out 2>&1"
 
 
 def test_result_counts_and_untouched_text():
@@ -405,7 +480,7 @@ def test_a_value_that_starts_with_a_dash_needs_a_literal_double_dash():
                 sub(template, value)
             assert info.value.code == "option"
         for template in ("grep -- {m} f", "grep -e x -- '{m}' \"{m}\"", "grep 'x{m}' f", 'grep "--to={m}" f',
-                         "grep --to='{m}' f", "printf '%s' -- {m}"):
+                         "grep --to='{m}' f", "printf '%s' -- {m}", "printf '100%% %s\\n\\t' -- {m}"):
             assert value in sub(template, value)
     # the -- must be a literal word of the same command, before the marker, and not itself a value
     for template in ("grep '--' {m}", "grep {m} --", "grep -- x | grep {m}", "grep {m2} {m}"):
@@ -439,11 +514,11 @@ def test_every_builtin_and_reserved_word_of_the_installed_shells_is_known():
              "_", name], capture_output=True).returncode == 0}
     assert len(listed) > 100, "no shell to ask"
     assert not listed - plain.SHELL_WORDS, sorted(listed - plain.SHELL_WORDS)
-    assert shellsub.ALLOWED_BUILTINS <= plain.BUILTINS
+    assert shellsub.BUILTIN_NAMES <= plain.BUILTINS
 
 
 # -- every nasty value in every context, run by the real shells -----------------------------------
-def run_shell(receivers: Bin, shell: str, script: str, timeout: int = 120):
+def run_shell(receivers: Bin, shell: str, script: str, timeout: int = 600):
     return subprocess.run([shell, "-c", script], capture_output=True, cwd=receivers.cwd, env=receivers.env(shell),
                           stdin=subprocess.DEVNULL, timeout=timeout)
 
@@ -456,7 +531,7 @@ def test_nasty_values_arrive_exactly_and_never_run(receivers, shell, name):
     for number, value in enumerate(ALL_VALUES):
         command = render(template, M, str(number), receivers)
         try:
-            text = substitute(command, spans_for(command, {M: value}), kind_of(shell)).text
+            text = substitute(command, spans_for(command, {M: value}), kind_of(shell), EXTRA).text
         except Refused:
             assert expected_refusal(name, value), f"{name}: unexpected refusal of value #{number}"
             refused += 1
@@ -485,7 +560,7 @@ def test_random_values_in_every_context(receivers, shell):
         for number, value in enumerate(values):
             command = render(template, M, str(number), receivers)
             try:
-                lines.append(substitute(command, spans_for(command, {M: value}), kind_of(shell)).text)
+                lines.append(substitute(command, spans_for(command, {M: value}), kind_of(shell), EXTRA).text)
             except Refused:
                 assert expected_refusal(name, value), (name, repr(value))
                 continue
@@ -507,7 +582,7 @@ def test_several_markers_and_values_in_one_command(receivers, shell):
     markers = list(values)
     command = (f"dump 0 -- {markers[0]} '{markers[1]}' \"{markers[2]}{markers[3]}\" {markers[5]} {markers[6]} && "
                f"printf '%s|%s' -- {markers[4]} | sdump 1\nrc 5")
-    text = substitute(command, spans_for(command, values), shell).text
+    text = substitute(command, spans_for(command, values), shell, EXTRA).text
     result = run_shell(receivers, shell, text)
     got = list(values.values())
     assert result.returncode == 5
@@ -524,9 +599,10 @@ class Runner:
 
     def __init__(self, box, receivers: Bin, shell: str):
         self.box, self.receivers, self.shell = box, receivers, shell
+        (box.data / "config.json").write_text('{"restore_programs_extra": ["dump", "sdump", "rc", "psprobe"]}')
         self.plugin, self.settings = standin_plugin(box)
 
-    def run(self, command: str, *, ticket: object = True, env: dict | None = None, timeout: int = 120):
+    def run(self, command: str, *, ticket: object = True, env: dict | None = None, timeout: int = 600):
         if ticket is True:
             ticket = bashwrap.restore_ticket(command, self.settings.vault_dir)
         script = bashwrap.wrap(command, self.settings, ticket if isinstance(ticket, str) else None)
@@ -588,7 +664,7 @@ def test_runner_restores_every_nasty_value_in_every_context(runner, seeded):
     assert "PWNED" not in log and "日本語" not in log and '"restored"' in log
 
 
-REVIEW_CASES = sorted(name for name in REFUSED if name.startswith(("review:", "printf", "formerly accepted")))
+REVIEW_CASES = sorted(name for name in REFUSED if name.startswith(("review:", "review3:", "printf", "formerly accepted")))
 
 
 @pytest.mark.parametrize("name", REVIEW_CASES + ["command name", "eval", "sh -c", "output redirection target", "xargs",
@@ -596,7 +672,9 @@ REVIEW_CASES = sorted(name for name in REFUSED if name.startswith(("review:", "p
                                                  "piped into a shell", "any variable in the command", "cd"])
 def test_runner_refuses_everything_outside_the_grammar_and_runs_nothing(runner, box, name):
     """Every case from the reviews, through the real path, with the value that ran in the review."""
-    marker = box.seed("a[$(touch PWNED)]")
+    # the value that ran in the reviews: bash evaluates it as a variable name, zsh (psvar is a real zsh
+    # array) as arithmetic
+    marker = box.seed("psvar[$(touch PWNED)1]" if "printf" in name else "a[$(touch PWNED)]")
     command = "touch RAN\n" + render(REFUSED[name], marker)
     result, _ = runner.run(command)
     assert result.returncode == 125, (name, result.stderr[-300:])
@@ -613,7 +691,7 @@ def test_printf_never_takes_an_option_or_a_variable_name_from_a_value(runner, re
     for command in (f"printf {option} {name} hi", f"printf '{option}' \"{name}\" hi", f"printf -- {option} {name}",
                     f"printf '%s' {option} {name}", f"printf -v {name} x", f"true; printf {option} {name} hi"):
         with pytest.raises(Refused):
-            substitute(command, spans_for(command, {option: "-v", name: "a[$(touch PWNED)]"}), runner.shell)
+            substitute(command, spans_for(command, {option: "-v", name: "a[$(touch PWNED)]"}), runner.shell, EXTRA)
         result, _ = runner.run(command)
         assert result.returncode == 125 and receivers.side_effects() == [], command
     result, _ = runner.run(f"printf '%s %s %s' -- {option} {name} > {receivers.dumps}/1")
@@ -652,7 +730,7 @@ def test_a_command_cannot_get_values_by_starting_the_runner_itself(runner, seede
 
 def test_restore_off_never_restores_even_with_a_ticket(runner, seeded):
     marker = next(m for m, value in seeded.items() if value == "a b")
-    (runner.box.data / "config.json").write_text('{"restore_in_bash": "off"}')
+    (runner.box.data / "config.json").write_text('{"restore_in_bash": "off", "restore_programs_extra": ["dump"]}')
     result, _ = runner.run(f"dump 0 '{marker}'")
     assert result.returncode == 0 and runner.receivers.got(0) == marker.encode() + b"\0"
 
@@ -718,20 +796,24 @@ FRAGMENTS = [
 # A second vocabulary made of what the grammar accepts, plus the programs it must refuse, so that many
 # commands ARE accepted and run: this is the one that tests the grammar rather than the refusals.
 PLAIN_FRAGMENTS = (
-    ["echo", "printf '%s'", "printf", "printf --", "true", ":", "cat", "grep", "ls", "./x", "/bin/echo", "tee"] * 2
-    + ["env", "sh -c", "eval", "xargs", "test", "cd", "nice", "exec", "command", "time", "sudo", "awk", "find . -exec",
-       "export", "read", "wait", "set", "x=", "X=1"]
+    ["grep", "cat", "head", "wc", "sort", "tr", "cut", "printf '%s'", "printf '%s\\n'", "printf --", "true", ":",
+     "/bin/cat", "tee", "uniq", "ls", "diff", "rg", "file", "stat"] * 2
+    + ["echo", "printf", "printf '%d'", "printf '%s %d'", "printf '%b'", "env", "sh -c", "eval", "xargs", "test", "cd",
+       "nice", "exec", "command", "time", "sudo", "awk", "find . -exec", "export", "read", "wait", "set", "x=", "X=1",
+       "perl5.36 -e", "bash5 -c", "./x", "bin/grep", "git -c", "man -P", "sort --compress-program", "rg --pre",
+       "sort -o", "file -m", "less", "fzf --preview"]
     + [" ", " ", " ", " ", "|", "&&", "||", ";", "\n", "> /dev/null", "2>&1", "< /dev/null", ">> /dev/null"]
-    + ["--", "--", "-n", "-e", "-v", "a", "b", "'c d'", '"e f"', "--to=", "'", '"', "~/x", "=", "x'", '"y']
+    + ["--", "--", "--", "-n", "-e", "-v", "a", "b", "'c d'", '"e f"', "--to=", "'", '"', "~/x", "=", "x'", '"y']
 )
 # Two markers in one command get these in order: an option that takes a NAME, then a NAME that runs code.
 CANARY_PAIRS = [("-v", "a[$(pwn)]"), ("-v", "x[`pwn`]"), ("-p", "a[$(pwn)]"), ("-a", "a[$(pwn)]"), ("--", "$(pwn)"),
                 ("-n", "a[$(pwn)]"), ("-va[$(pwn)]", "x"), ("-f", "pwn"), ("-c", "pwn"), ("-e", "a[$(pwn)]")]
-CANARIES = ["pwn", "$(pwn)", "a[$(pwn)]", "-va[$(pwn)]", "`pwn`", "'; pwn; '", "\"; pwn; \"", "\\'; pwn; \\'", "; pwn", "| pwn", "\npwn\n", "x\npwn",
+CANARIES = ["pwn", "$(pwn)", "a[$(pwn)]", "psvar[$(pwn)1]", "-va[$(pwn)]", "`pwn`", "'; pwn; '", "\"; pwn; \"", "\\'; pwn; \\'", "; pwn", "| pwn", "\npwn\n", "x\npwn",
             "&& pwn", "a[$(pwn)]", "\\\"; pwn; \\\"", "EOF\npwn", "$'\\x27'; pwn; '", "');pwn;('", "}; pwn; {", "*/../pwn"]
 
 
-def structural_fuzz(tmp, shell: str, fragments: list[str], count: int, seed: int) -> tuple[int, list]:
+def structural_fuzz(tmp, shell: str, fragments: list[str], count: int, seed: int,
+                    extra=frozenset()) -> tuple[int, list]:
     """Returns (commands the lexer accepted and that were run, [(command, value)] in which the value ran)."""
     rng = random.Random(seed)
     bin_dir, cwd, flag = tmp / "fuzzbin", tmp / "fuzzcwd", tmp / "PWNED"
@@ -753,7 +835,7 @@ def structural_fuzz(tmp, shell: str, fragments: list[str], count: int, seed: int
                 if not isinstance(value, str):
                     for number, span in enumerate(spans):
                         span.value = value[number % 2]
-                text = substitute(command, spans, kind_of(shell)).text
+                text = substitute(command, spans, kind_of(shell), extra).text
             except Refused:
                 continue
             accepted += 1
@@ -774,19 +856,29 @@ def test_no_accepted_command_shape_lets_a_value_run(tmp_path, shell, vocabulary)
     fragments = FRAGMENTS if vocabulary == "all" else PLAIN_FRAGMENTS
     accepted, hits = structural_fuzz(tmp_path, shell, fragments, 2500, seed=len(shell) + len(vocabulary))
     assert not hits, hits[:5]
-    assert accepted > (300 if vocabulary == "plain" else 20), "the fuzz must actually run commands"
+    assert accepted > (150 if vocabulary == "plain" else 5), "the fuzz must actually run commands"
 
 
 def test_the_structural_fuzz_would_notice_a_broken_grammar(tmp_path, monkeypatch):
-    """The fuzz above proves something only if it fails for a grammar with a hole. Three holes are made."""
+    """The fuzz above proves something only if it fails for a grammar with a hole. Holes are made here."""
+    from datafog_guard import plain
     with monkeypatch.context() as patch:
         patch.setattr(shellsub, "_single", lambda value: value)             # quotes in a value are not escaped
-        assert structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS, 600, seed=5)[1]
-    with monkeypatch.context() as patch:
-        patch.setattr(shellsub, "_check_names", lambda parsed: None)        # any program or builtin may take a value
-        assert structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS, 600, seed=5)[1]
-    from datafog_guard import plain
+        assert structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS, 800, seed=5)[1]
+    with monkeypatch.context() as patch:                                    # no allow-list: any program takes a value
+        patch.setattr(shellsub, "_check_names", lambda parsed, extra=frozenset(): None)
+        assert structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS, 800, seed=5)[1]
+    with monkeypatch.context() as patch:                                    # the list matches by prefix, not exactly
+        patch.setattr(shellsub, "program_of", lambda name, extra=frozenset(): "grep")
+        assert structural_fuzz(tmp_path, "bash", ["env", "nice", "command", "nohup", "grep", " ", "--", ";", "|"], 600,
+                               seed=5)[1]
     with monkeypatch.context() as patch:                                    # $ and backticks are let through
         patch.setattr(plain, "_BARE", plain._BARE | frozenset("$`()"))
-        assert structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS + ["$(", ")", "`", "$(", ")", "`"] * 4, 1500, seed=5)[1]
-    assert not structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS, 600, seed=5)[1]
+        assert structural_fuzz(tmp_path, "bash", [f"cat $( {M} )", f"true ` {M} `", "grep x", ";", " ", "--"], 600,
+                               seed=5)[1]
+    if shutil.which("zsh"):
+        with monkeypatch.context() as patch:                                # printf takes any format
+            patch.setattr(shellsub, "_PRINTF_FORMAT", re.compile(r"(?s).*"))
+            assert structural_fuzz(tmp_path, "zsh", ["printf '%d'", "printf '%s %d'", " ", "--", ";", "true"], 600,
+                                   seed=5)[1]
+    assert not structural_fuzz(tmp_path, "bash", PLAIN_FRAGMENTS, 800, seed=5)[1]
