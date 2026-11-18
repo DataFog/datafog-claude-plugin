@@ -66,7 +66,7 @@ def test_full_run_against_the_simulator():
         found = checks(work)
         assert "FAIL" not in found.values() and "FINDING" not in found.values(), \
             {key: value for key, value in found.items() if value in ("FAIL", "FINDING")}
-        assert len({case for case, _ in found}) == 27
+        assert len({case for case, _ in found}) == 29
         report = open(os.path.join(work, "log", "results.md")).read()
         assert "L17-engine-breaks-mid-session" in report and "Hook time inside the engine" in report
         strict = "no real value in the transcript, the result record, permission_denials, stderr, the debug log " \
@@ -77,6 +77,9 @@ def test_full_run_against_the_simulator():
         assert found[("L22-bash-denied", "the hook denied it by the project's deny rule (step 2)")] == "PASS"
         assert found[("L26-bash-read-deny", "the command did not run")] == "PASS"
         assert found[("L27-bash-read-deny-directory", "the command did not run")] == "PASS"
+        assert found[("L28-bash-read-deny-quoted-glob", "the command did not run")] == "PASS"
+        assert found[("L29-bash-marker-not-plain", "the hook refused to restore a marker in a command that is "
+                                                    "not plain")] == "PASS"
         assert not os.path.exists(os.path.join(work, "project", "PWNED"))
 
 
@@ -101,5 +104,5 @@ def test_driver_reports_findings_and_leaks():
 def test_caps_stop_the_run():
     with tempfile.TemporaryDirectory(prefix="datafog-live.") as work:
         result, last = drive(work, LIVE_MAX_RUNS="3")
-        assert last == "LIVE DONE" and "runs used: 3, skipped by a cap: 24" in result.stdout
+        assert last == "LIVE DONE" and "runs used: 3, skipped by a cap: 26" in result.stdout
         assert "SKIPPED" in checks(work).values()

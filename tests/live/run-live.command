@@ -2,7 +2,7 @@
 # Double-click (macOS) or run from a terminal to check the DataFog plugin against your
 # real Claude Code, unattended.
 #
-# It runs tests/live/run_live.py from this checkout in a fresh temp dir: about 27 short
+# It runs tests/live/run_live.py from this checkout in a fresh temp dir: about 29 short
 # headless `claude -p` runs against a throwaway project of synthetic files, with a
 # temporary vault. Your real vault and plugin data are not touched. Hard caps: 30 runs,
 # 180 s each, 30 minutes in total. It uses your Claude Code login and usage.
