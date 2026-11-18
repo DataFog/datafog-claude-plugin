@@ -661,13 +661,15 @@ def test_hook_project_allow_rules_need_trust(box):
 
 def test_hook_marker_rules_come_before_allow_rules_and_after_deny_and_ask(box):
     marker = box.open_vault().tokenize(EMAIL)[0]
-    box.claude_settings("user", {"allow": ["Bash"], "ask": ["Bash(git push *)"], "deny": ["Bash(rm *)"]})
+    box.claude_settings("user", {"allow": ["Bash"], "ask": ["Bash(cat *)"], "deny": ["Bash(sort *)"]})
     decision, reason = outcome(box.pre("Bash", {"command": f"grep -c {marker} notes.txt"})[0])
     assert decision == "ask" and "1 EMAIL" in reason and "real values are put in when it runs" in reason
-    decision, reason = outcome(box.pre("Bash", {"command": f"rm {marker}"})[0])
+    decision, reason = outcome(box.pre("Bash", {"command": f"sort {marker}"})[0])
     assert decision == "deny" and "deny rule" in reason
-    decision, reason = outcome(box.pre("Bash", {"command": f"git push origin {marker}"})[0])
+    decision, reason = outcome(box.pre("Bash", {"command": f"cat {marker}"})[0])
     assert decision == "ask" and "ask rule" in reason
+    decision, reason = outcome(box.pre("Bash", {"command": f"rm {marker}"})[0])
+    assert decision == "deny" and "short list of programs" in reason, "a program that is not listed never gets a value"
     decision, _ = outcome(box.pre("Bash", {"command": f"grep -c {marker} notes.txt"}, DATAFOG_RESTORE_IN_BASH="allow")[0])
     assert decision == "allow"
 
@@ -1174,3 +1176,57 @@ def test_the_recogniser_is_what_splits_a_command_for_bash_rules():
                  "a *", "a ~u/x", "a 2>&1 |& b", "a\x00", "a # b", "a >| b", "a <<< b", "a <(b)", "x" * 30_000, "", "  ",
                  "; a", "a ;; b", "a &&", "a | | b", "> x", "a > ", "a 'unterminated", 'a "$b"', "export A=b"):
         assert plain.recognise(text) is None, text
+
+
+# -- third review -----------------------------------------------------------------------------------------
+def test_plain_rejects_a_name_that_starts_with_a_dash_and_multi_digit_descriptors():
+    from datafog_guard import plain
+    for text in ("-grep x", "-- x", "a | -b", "P 12>&1", "P 12<&0", "a 2>&12", "a 12>f", "a 10>>f", "a 2>&1x"):
+        assert plain.recognise(text) is None, text
+    for text in ("a 2>&1", "a 1>f", "a >&2", "a 2>>f", "a 0<f", "a 12 >f", "a b12 >f", "a 2>&-"):
+        assert plain.recognise(text) is not None, text
+    # `12` before a blank is an argument in every shell; glued to > it is a descriptor only in bash
+    assert [word.text for word in plain.recognise("a 12 >f").commands[0].words] == ["a", "12"]
+
+
+def test_wildcard_allow_rules_do_not_approve_test_or_printf_forms_that_evaluate_an_operand():
+    """`test -v 'x[$(cmd)]'` and `printf -v 'x[$(cmd)]'` typed literally run cmd under bash. Claude Code's
+    own `Bash` allow rule would approve them; here only an exact rule does."""
+    broad = rules(allow=["Bash", "Bash(test *)", "Bash(printf *)"])
+    for command in ("test -v 'x[$(touch PWNED)]'", "test 'x[$(touch PWNED)]' -eq 1", "test 1 -lt 'a[$(id)]'",
+                    "test -n a -o -v x", "printf -v 'x[$(touch PWNED)]' y", "printf -vx y"):
+        assert decide(command, broad, cwd="/work/p").outcome == "ask", command
+        assert decide(command, rules(allow=[f"Bash({command})"]), cwd="/work/p").outcome == "allow", command
+    for command in ("test -f notes.txt", "test -n abc", "printf '%s\\n' abc", "printf %d 7"):
+        assert decide(command, broad, cwd="/work/p").outcome == "allow", command
+
+
+def test_many_directories_and_suffix_words_stay_fast_and_ask(tmp_path):
+    """Review: `ls <7 directories> <19 KB of colon-suffix words>` took 2-5 s (words x suffixes x bases x
+    rules x realpath). The product is bounded; past the bound the command is not cleared: firm ask."""
+    import time
+    for number in range(12):
+        (tmp_path / f"d{number}").mkdir()
+    found = RuleSet()
+    found.add(["Bash"], "allow", "user settings")
+    found.add(["Read(./secret.env)", "Read(//**/.env)", "Read(~/.ssh/**)", "Edit(**/*.pem)", "Read(src/**/x*y*z*)",
+               "Read(**/a*b*c*d*)"], "deny", "project settings", [str(tmp_path)])
+    shapes = {
+        "distinct colon words": "ls d0 d1 d2 d3 d4 d5 d6 " + " ".join(f"w{n}:x{n}:y{n}:z{n}" for n in range(950)),
+        "repeated colon words": "ls d0 d1 d2 d3 d4 d5 d6 " + " ".join(["a:b:c:d:e:f:g:h"] * 1150),
+        "long option clusters": "ls d0 d1 d2 d3 d4 d5 d6 " + " ".join("-" + "abcdefghij" * 6 + str(n) for n in range(280)),
+        "twelve directories": "ls " + " ".join(f"d{n}" for n in range(12)) + " " + " ".join(f"p{n}/q" for n in range(900)),
+        "deep relative words": "ls d0 d1 d2 d3 d4 d5 d6 " + " ".join("/".join(["x"] * 30) + str(n) for n in range(280)),
+    }
+    for name, command in shapes.items():
+        assert len(command) < 20_000, name
+        worst = 0.0
+        for mode in ("default", "bypassPermissions"):
+            started = time.perf_counter()
+            verdict = decide(command, found, mode=mode, cwd=str(tmp_path), project_dir=str(tmp_path))
+            worst = max(worst, time.perf_counter() - started)
+            if name != "repeated colon words":
+                assert verdict.outcome == "ask" and verdict.firm, (name, mode, verdict.outcome)
+        assert worst < 1.0, f"{name}: {worst:.2f} s"
+    # a modest command over the same directories is still cleared
+    assert decide("ls d0 d1 notes.txt", found, cwd=str(tmp_path), project_dir=str(tmp_path)).outcome == "allow"

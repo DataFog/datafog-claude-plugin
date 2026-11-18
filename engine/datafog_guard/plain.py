@@ -11,9 +11,9 @@ PLAIN (the whole command must fit; this is the definition quoted in the README):
     command   := simple ( separator simple )*  [ ";" ]        blank lines are allowed
     separator := "|"  |  "&&"  |  "||"  |  ";"  |  newline
     simple    := name ( word | redirection )*
-    redirection := [digits] ( ">" | ">>" | "<" ) word          to or from a literal path
+    redirection := [digit] ( ">" | ">>" | "<" ) word           to or from a literal path
                  | "&>" word | "&>>" word
-                 | [digits] ( ">&" | "<&" ) ( digits | "-" )    descriptor duplication
+                 | [digit] ( ">&" | "<&" ) ( digit | "-" )      descriptor duplication, one digit each
     word      := one or more of
                    bare text      letters, digits and  _ @ % + = : , . / -
                    '...'          anything but a single quote (the shell reads nothing inside)
@@ -60,8 +60,13 @@ BUILTINS = frozenset("""
     zparseopts zregexparse zstyle -
 """.split())
 SHELL_WORDS = KEYWORDS | BUILTINS
-# Builtins a plain command may use. None of them evaluates an argument, changes how later text is
-# read, or changes the directory (cd and friends are handled separately, see name_problem).
+# Builtins a plain command may use: none of them changes how later text is read or changes the
+# directory (cd and friends are handled separately, see name_problem). This is about reading the
+# command with certainty, NOT a claim that their arguments are inert: `test -v 'x[$(cmd)]'` and
+# `printf -v 'x[$(cmd)]'`, typed by the model, run cmd under bash, exactly as they would with a
+# plain `Bash` allow rule in Claude Code. Marker restoration has its own, far shorter list
+# (shellsub.RESTORE_PROGRAMS), and ccperms does not let a wildcard allow rule approve `test` with
+# -v or an arithmetic operator, or `printf -v`.
 PLAIN_BUILTINS = frozenset({"echo", "printf", "true", "false", ":", "pwd", "test", "kill", "wait", "type",
                             "which", "exit"})
 MOVES = frozenset({"cd", "chdir", "pushd", "popd"})
@@ -222,6 +227,8 @@ def _parse(text: str, markers) -> Plain | None:
         j = i
         while j < n and text[j] in _DIGITS:
             j += 1
+        if j - i > 1 and j < n and text[j] in "<>":
+            return None                           # `12>&1`: bash reads a descriptor, zsh and dash an argument
         if j < n and (text[j] in "<>" or (j == i and text[j:j + 2] == "&>")):
             if current is None:
                 return None                       # a redirection before the command name
@@ -235,7 +242,7 @@ def _parse(text: str, markers) -> Plain | None:
                     k += 1
                 if k == after and text[after:after + 1] == "-":
                     k = after + 1
-                if k == after or (k < n and text[k] not in " \t\n;|&<>"):
+                if k == after or k - after > 1 or (k < n and text[k] not in " \t\n;|&<>"):
                     return None
                 current.redirected = True
                 current.end = i = k

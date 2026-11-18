@@ -948,6 +948,9 @@ def is_simple(command: str, markers=()) -> bool:
     return parsed is not None and len(parsed.commands) == 1 and not parsed.commands[0].redirected
 
 
+_TEST_EVALUATES = frozenset({"-v", "-R", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-o", "-a"})
+
+
 def allow_rule_for(rules: RuleSet, command: str, exact_only: bool = False) -> Rule | None:
     """The allow rule that approves a SIMPLE command, or None. The caller checked deny and ask."""
     text = command.strip()
@@ -958,7 +961,11 @@ def allow_rule_for(rules: RuleSet, command: str, exact_only: bool = False) -> Ru
     # an exact-match rule for the full command string". STRICTER: the same for every wrapper, including
     # the ones Claude Code strips (the docs do not say whether the unstripped text is matched as well),
     # for shells and eval, and for a command name that is quoted or escaped.
-    needs_exact = exact_only or not unquoted or name in WRAPPERS or name in SHELLS or name == "eval" or \
+    # `test -v 'x[$(cmd)]'`, an arithmetic operand of test, and `printf -v 'x[$(cmd)]'` make bash evaluate
+    # the operand. Claude Code's own wildcard rule would approve them; STRICTER: only an exact rule does here.
+    evaluates = (name == "test" and any(plain in _TEST_EVALUATES for _, plain in words[1:])) or \
+        (name == "printf" and any(plain.startswith("-v") for _, plain in words[1:]))
+    needs_exact = exact_only or evaluates or not unquoted or name in WRAPPERS or name in SHELLS or name == "eval" or \
         name in ("watch", "setsid", "ionice", "flock") or \
         (name == "find" and any(plain in _FIND_ACTIONS for _, plain in words[1:]))
     for rule in rules.allow:
@@ -1012,6 +1019,9 @@ _SUFFIXES = re.compile(r"[=:,@]")
 _LOOSE = re.compile(r"[\s;|&<>()`$]+")
 WALK_LIMIT = 3000
 MAX_BASES = 8
+MAX_SUFFIXES = 12            # per word: tails after = : , @ and of an option cluster
+MAX_TEXTS = 600              # per command: candidate paths
+MAX_RESOLUTIONS = 2500       # per command: (candidate, base directory) pairs looked at
 MAX_LOOSE_TOKENS = 3000
 
 
@@ -1029,7 +1039,7 @@ def _texts_of(text: str) -> list[str]:
     for match in _SUFFIXES.finditer(text):
         found.append(text[match.end():])
     if text.startswith("-") and not text.startswith("--"):
-        found.extend(text[index:] for index in range(2, min(len(text), 66)))
+        found.extend(text[index:] for index in range(2, len(text)))
     return [item for item in dict.fromkeys(found) if item and item != "-"]
 
 
@@ -1076,17 +1086,24 @@ def check_paths(rules: RuleSet, parsed: grammar.Plain, cwd: str, project_dir: st
     home = os.path.expanduser("~")
     direct: list[str] = []
     mentioned: list[str] = []
+    capped = False               # more candidates than are looked at: the result cannot clear the command
     for simple in parsed.commands:
         for word in simple.words + [target for _, target in simple.targets]:
             text = word.text
             for marker, value in (marker_values or {}).items():
                 text = text.replace(marker, value)
-            direct.extend(_texts_of(text))
+            texts = _texts_of(text)
+            capped = capped or len(texts) > MAX_SUFFIXES
+            direct.extend(texts[:MAX_SUFFIXES])
             if not word.bare and any(char in text for char in " \t\n;|&()'\""):
-                for piece in _PIECES.split(text):
-                    mentioned.extend(_texts_of(piece) if piece else [])
+                for piece in _PIECES.split(text)[:MAX_TEXTS]:
+                    mentioned.extend(_texts_of(piece)[:MAX_SUFFIXES] if piece else [])
     direct = list(dict.fromkeys(direct))
     mentioned = [text for text in dict.fromkeys(mentioned) if text not in direct]
+    capped = capped or len(direct) > MAX_TEXTS or len(mentioned) > MAX_TEXTS
+    direct, mentioned = direct[:MAX_TEXTS], mentioned[:MAX_TEXTS]
+    real_cache: dict = {}
+    budget = [MAX_RESOLUTIONS]
 
     def too_long(text: str) -> bool:
         return len(text) > MAX_PATH_LENGTH or text.count("/") > MAX_PATH_SEGMENTS or "\x00" in text
@@ -1095,13 +1112,19 @@ def check_paths(rules: RuleSet, parsed: grammar.Plain, cwd: str, project_dir: st
         if text == "~" or text.startswith("~/"):
             text = home + text[1:]
         found = []
-        for base in bases:
+        for base in (bases[:1] if text.startswith("/") else bases):
+            budget[0] -= 1
+            if budget[0] < 0:
+                break
             joined = text if text.startswith("/") else base.rstrip("/") + "/" + text
             candidates = [os.path.normpath(joined)]
-            try:
-                candidates.append(os.path.realpath(joined))      # symbolic links first, then "..", like the kernel
-            except (OSError, ValueError):
-                pass
+            if joined not in real_cache:
+                try:
+                    real_cache[joined] = os.path.realpath(joined)    # symbolic links first, then "..", like the kernel
+                except (OSError, ValueError):
+                    real_cache[joined] = None
+            if real_cache[joined]:
+                candidates.append(real_cache[joined])
             for path in candidates:
                 if path not in found:
                     found.append(path)
@@ -1111,10 +1134,14 @@ def check_paths(rules: RuleSet, parsed: grammar.Plain, cwd: str, project_dir: st
     bases = [cwd]
     for _ in range(2):
         for text in direct:
-            if too_long(text) or len(bases) >= MAX_BASES:
+            if too_long(text):
                 continue
             for path in resolved(text, list(bases)):
-                if path not in bases and len(bases) < MAX_BASES and os.path.isdir(path):
+                if path in bases or not os.path.isdir(path):
+                    continue
+                if len(bases) >= MAX_BASES:
+                    capped = True             # more directories than are tried as a starting point
+                else:
                     bases.append(path)
 
     walked = 0
@@ -1142,6 +1169,9 @@ def check_paths(rules: RuleSet, parsed: grammar.Plain, cwd: str, project_dir: st
                         break
                 if finding.unsure:
                     break
+    if capped or budget[0] < 0:
+        finding.unsure = finding.unsure or ("it names more possible paths than the plugin checks against your Read "
+                                            "and Edit rules")
     for text in mentioned:
         if finding.unsure:
             break
