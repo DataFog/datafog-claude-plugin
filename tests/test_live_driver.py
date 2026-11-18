@@ -41,7 +41,8 @@ def checks(work) -> dict:
 
 
 def test_refuses_to_run_outside_the_temp_dir(tmp_path):
-    for outside in ("/", os.path.dirname(tempfile.gettempdir().rstrip("/")) or "/"):   # wherever the repo lives
+    # Not the parent of the temp dir: on macOS that parent is itself under /var/folders, an accepted root.
+    for outside in ("/", "/usr"):
         result, last = drive(outside)
         assert result.returncode == 1 and last.startswith("LIVE ABORTED") and "temp dir" in last
     result, last = drive("/nonexistent/dir")
