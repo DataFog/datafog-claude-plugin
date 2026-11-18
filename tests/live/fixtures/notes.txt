@@ -1,0 +1,8 @@
+Support notes (synthetic test data)
+
+Primary contact: ada.synthetic@example.com
+Callback number: +1-202-555-0143
+Test card on file: 4242 4242 4242 4242
+Placeholder SSN: 078-05-1120
+Status: waiting on reply
+End of notes

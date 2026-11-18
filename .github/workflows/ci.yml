@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "rebuild/**"]
+  pull_request:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Install the engine's one dependency and the test tools
+        run: python -m pip install "datafog-core>=1.4.0,<1.5" "pytest>=8" "ruff>=0.6" "mypy>=1.10"
+
+      - name: Manifests and hook config parse
+        run: |
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json .mcp.json; do
+            python -c "import json, sys; json.load(open(sys.argv[1])); print('ok:', sys.argv[1])" "$f"
+          done
+
+      - name: Shell scripts parse
+        run: |
+          sh -n scripts/datafog-guard && sh -n scripts/bootstrap.sh && sh -n scripts/wrap.sh
+          bash -n scripts/wrap.sh && zsh -n scripts/wrap.sh && bash -n tests/live/run-live.command
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy
+
+      - name: Tests (real datafog-core, real bash and zsh; bootstrap tests use PyPI)
+        env:
+          DATAFOG_TEST_NETWORK: "1"
+        run: python -m pytest

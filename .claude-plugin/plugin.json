@@ -1,0 +1,35 @@
+{
+  "name": "datafog",
+  "displayName": "DataFog",
+  "description": "Keeps emails, phone numbers, card and ID numbers, API keys and other credentials out of the model's context: values in files, command output and tool results are replaced by reversible markers before Claude sees them, and swapped back locally when Claude writes. Development build; see the README for what is and is not covered.",
+  "version": "0.2.0-dev",
+  "author": {
+    "name": "DataFog",
+    "url": "https://datafog.ai"
+  },
+  "homepage": "https://datafog.ai",
+  "repository": "https://github.com/DataFog/datafog-claude-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["privacy", "pii", "secrets", "redaction", "hooks"],
+  "userConfig": {
+    "keep_vault_on_uninstall": {
+      "type": "boolean",
+      "title": "Keep the vault when the plugin is uninstalled",
+      "description": "On: the vault (the table that turns markers back into your real values) is stored in your user data folder and survives an uninstall. Off: it is stored in the plugin's data folder, which Claude Code deletes on uninstall; markers left in your files can then never be restored.",
+      "default": true
+    },
+    "unscannable_file_policy": {
+      "type": "string",
+      "title": "Files that cannot be checked",
+      "description": "What to do when Claude reads a file DataFog cannot check (images, PDFs, binary or very large files): ask you each time, deny the read, or allow it unchecked.",
+      "options": ["ask", "deny", "allow"],
+      "default": "ask"
+    },
+    "entities": {
+      "type": "string",
+      "title": "Entity types to detect",
+      "description": "Comma-separated list, or empty for the default set (EMAIL, PHONE, SSN, CREDIT_CARD, API_KEY, BEARER_TOKEN, JWT, PRIVATE_KEY, CREDENTIAL_URI, US_ROUTING_NUMBER, NPI, ACCOUNT_NUMBER). Also available, noisy in code: DATE, IP_ADDRESS, ZIP_CODE, STREET_ADDRESS, UUID.",
+      "default": ""
+    }
+  }
+}

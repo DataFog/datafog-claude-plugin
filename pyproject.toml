@@ -1,0 +1,33 @@
+[project]
+name = "datafog-guard"
+version = "0.2.0.dev0"
+description = "Engine of the DataFog Claude Code plugin"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = ["datafog-core>=1.4.0,<1.5"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["engine"]
+addopts = "-q"
+markers = ["network: needs PyPI (bootstrap of the private environment)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B904", "B905", "UP031", "UP037"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.mypy]
+files = ["engine/datafog_guard"]
+python_version = "3.10"
+check_untyped_defs = true
+warn_unused_ignores = false

@@ -1,0 +1,67 @@
+#!/bin/sh
+# DataFog guard launcher: runs the engine with the plugin's private Python environment.
+#
+#   datafog-guard [--data-dir DIR] [--vault-dir DIR] <subcommand> [args]
+#
+# The environment lives in the plugin data directory (venv/). It is created by
+# `datafog-guard bootstrap`, which the SessionStart hook runs.
+#
+# Fail closed: when the environment is missing, `hook` exits 2, which makes Claude Code
+# block the tool call or prompt (every hook entry also sets onFailure: block).
+
+while :; do
+  case "$1" in
+    --data-dir) DATAFOG_DATA_DIR=$2; export DATAFOG_DATA_DIR; shift 2 ;;
+    --vault-dir) DATAFOG_VAULT_DIR=$2; export DATAFOG_VAULT_DIR; shift 2 ;;
+    *) break ;;
+  esac
+done
+
+# A value that still looks like an unexpanded "${NAME}" placeholder counts as not set.
+case "${DATAFOG_DATA_DIR:-}" in '${'*) unset DATAFOG_DATA_DIR ;; esac
+case "${DATAFOG_VAULT_DIR:-}" in '${'*|'') unset DATAFOG_VAULT_DIR ;; esac
+case "${CLAUDE_PLUGIN_DATA:-}" in '${'*) unset CLAUDE_PLUGIN_DATA ;; esac
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
+DATA=${DATAFOG_DATA_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/datafog-datafog}}
+PY="$DATA/venv/bin/python"
+[ -x "$PY" ] || PY="$DATA/venv/Scripts/python.exe"
+
+case "$1" in
+  bootstrap)
+    shift
+    exec sh "$ROOT/scripts/bootstrap.sh" "$DATA" "$@"
+    ;;
+  session-start)
+    # Install or verify the environment, then run the SessionStart hook. Hook stdin is kept
+    # for the engine; the installer's output goes to a log file so it cannot disturb the
+    # hook's JSON output.
+    mkdir -p "$DATA/log" 2>/dev/null
+    sh "$ROOT/scripts/bootstrap.sh" "$DATA" </dev/null >>"$DATA/log/bootstrap.log" 2>&1
+    PY="$DATA/venv/bin/python"
+    [ -x "$PY" ] || PY="$DATA/venv/Scripts/python.exe"
+    if [ ! -x "$PY" ]; then
+      cat >/dev/null
+      MESSAGE="DataFog guard is NOT protecting this session: its Python environment could not be installed. Tool calls are blocked until it is. To fix it, run this in a terminal: sh '$ROOT/scripts/datafog-guard' --data-dir '$DATA' bootstrap   (details: $DATA/log/bootstrap.log)"
+      printf '{"systemMessage": "%s"}\n' "$(printf '%s' "$MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+      exit 0
+    fi
+    set -- hook
+    ;;
+esac
+
+if [ ! -x "$PY" ] && [ "$1" = "mcp" ]; then
+  # The MCP server may be started while the SessionStart hook is still installing.
+  n=0
+  while [ ! -f "$DATA/venv/.datafog-installed" ] && [ "$n" -lt 120 ]; do sleep 0.5; n=$((n + 1)); done
+  PY="$DATA/venv/bin/python"
+  [ -x "$PY" ] || PY="$DATA/venv/Scripts/python.exe"
+fi
+
+if [ ! -x "$PY" ]; then
+  echo "DataFog guard is not installed yet, so this was blocked to keep data protected. Run: sh '$ROOT/scripts/datafog-guard' --data-dir '$DATA' bootstrap" >&2
+  exit 2
+fi
+
+# -I: isolated mode. The working directory is the user's project; nothing in it may be imported.
+exec "$PY" -I "$ROOT/engine/run.py" "$@"
