@@ -170,6 +170,15 @@ class FileLock:
 
 
 def _fogvault():
+    from . import VAULT_REQUIREMENT
+    from .dependencies import check_module, reviewed_version
+    try:
+        reviewed_version(VAULT_REQUIREMENT)   # reject unreviewed distributions before importing their code
+    except EngineUnavailable:
+        from .support import UNSUPPORTED, platform_problem
+        if platform_problem():
+            raise EngineUnavailable(UNSUPPORTED, "unsupported_platform") from None
+        raise
     try:
         import datafog_fogvault
     except Exception as error:   # no wheel for this machine, or a broken install
@@ -178,6 +187,7 @@ def _fogvault():
             raise EngineUnavailable(UNSUPPORTED, "unsupported_platform") from error
         raise EngineUnavailable("the datafog-fogvault library cannot be loaded; run the bootstrap command "
                                 "shown at session start", "vault_library_unavailable") from error
+    check_module(datafog_fogvault, VAULT_REQUIREMENT)
     return datafog_fogvault
 
 

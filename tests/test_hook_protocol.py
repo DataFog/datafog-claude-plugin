@@ -103,6 +103,22 @@ def test_post_mcp_list_shape(box):
     assert len(MARKER.findall(new[0]["text"])) == 3
 
 
+@pytest.mark.parametrize("tool", [recorded.MCP_TOOL, "Agent", "Task"])
+def test_post_resource_link_scans_display_text_and_preserves_identifier(box, tool):
+    link = {"type": "resource_link", "uri": f"customer://{EMAIL}/record",
+            "name": EMAIL, "title": f"Call {PHONE}", "description": f"Contact {EMAIL}",
+            "mimeType": "text/plain", "size": 123}
+    response = [link] if tool == recorded.MCP_TOOL else {"content": [link]}
+    new = updated(box.post(tool, {}, response)[0])
+    same_shape(response, new)
+    replaced = new[0] if isinstance(new, list) else new["content"][0]
+    for key in ("name", "title", "description"):
+        assert_no_sentinel(replaced[key])
+        assert MARKER.search(replaced[key])
+    for key in ("type", "uri", "mimeType", "size"):
+        assert replaced[key] == link[key]
+
+
 def test_post_agent_keeps_every_other_field(box):
     response = recorded.agent()
     new = updated(box.post("Agent", recorded.ALL["Agent"][0], response)[0])

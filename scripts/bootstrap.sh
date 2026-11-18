@@ -4,14 +4,14 @@
 #   bootstrap.sh <data dir> [--force]
 #   bootstrap.sh --platform          only check that this machine is supported
 #
-# Idempotent. Fast path: when venv/.datafog-installed names the current requirements,
-# nothing is done. Uses uv when it is installed, otherwise python -m venv and pip.
+# Idempotent. Fast path: the stamp, installed versions and import probe all pass.
+# Uses uv when it is installed, otherwise python -m venv and pip.
 # Exit status 0 means the environment is ready; 3 means this machine is not supported.
 
 # The detector and the encrypted vault. datafog-fogvault has compiled wheels for macOS on
 # Apple Silicon and Linux x86_64 with glibc 2.38 or later only; there is no other storage.
-CORE_REQUIREMENT='datafog-core>=1.7.0,<1.8'
-VAULT_REQUIREMENT='datafog-fogvault>=1.7.0,<1.8'
+CORE_REQUIREMENT='datafog-core==1.7.0'
+VAULT_REQUIREMENT='datafog-fogvault==1.7.0'
 REQUIREMENT="$CORE_REQUIREMENT $VAULT_REQUIREMENT"
 UNSUPPORTED='DataFog does not support this machine. It needs macOS on Apple Silicon, or Linux on x86_64 with glibc 2.38 or later. Nothing is protected and tool calls are blocked; disable or uninstall the plugin to work without it.'
 
@@ -46,7 +46,24 @@ venv_python() {
   fi
 }
 
-if [ "$FORCE" != "--force" ] && [ -n "$(venv_python)" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$REQUIREMENT" ]; then
+verified_environment() {
+  [ -n "$(venv_python)" ] || return 1
+  "$(venv_python)" -I -c '
+from importlib.metadata import version
+import sys
+for requirement in sys.argv[1:]:
+    name, expected = requirement.split("==", 1)
+    if version(name) != expected:
+        raise SystemExit(1)
+import datafog_core, datafog_fogvault
+if datafog_core.__version__ != sys.argv[1].split("==", 1)[1] or datafog_fogvault.__version__ != sys.argv[2].split("==", 1)[1]:
+    raise SystemExit(1)
+datafog_core.scan("probe")
+datafog_fogvault.ApplicationVault
+' "$CORE_REQUIREMENT" "$VAULT_REQUIREMENT" 2>/dev/null
+}
+
+if [ "$FORCE" != "--force" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$REQUIREMENT" ] && verified_environment; then
   exit 0
 fi
 
@@ -65,7 +82,7 @@ done
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 # Another session may have finished the install while we waited.
-if [ "$FORCE" != "--force" ] && [ -n "$(venv_python)" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$REQUIREMENT" ]; then
+if [ "$FORCE" != "--force" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$REQUIREMENT" ] && verified_environment; then
   exit 0
 fi
 
@@ -101,7 +118,7 @@ else
   [ "$ok" = 1 ] && { "$(venv_python)" -m pip install --quiet --disable-pip-version-check "$CORE_REQUIREMENT" "$VAULT_REQUIREMENT" || ok=0; }
 fi
 
-if [ "$ok" = 1 ] && "$(venv_python)" -c 'import datafog_core, datafog_fogvault; datafog_core.scan("probe"); datafog_fogvault.ApplicationVault' 2>/dev/null; then
+if [ "$ok" = 1 ] && verified_environment; then
   printf '%s' "$REQUIREMENT" > "$STAMP"
   echo "datafog bootstrap: ready"
   exit 0

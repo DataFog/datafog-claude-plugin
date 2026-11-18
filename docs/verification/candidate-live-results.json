@@ -1,0 +1,1048 @@
+{
+  "date": "2026-11-18",
+  "production_commit": "aa99659a0f3218c443a6fcbc17dbeb9e43537574",
+  "status": "DONE",
+  "claude_code": "2.1.327 (Claude Code)",
+  "runs": 29,
+  "skipped": 0,
+  "totals": {
+    "PASS": 187,
+    "INFO": 24
+  },
+  "full_local_results_sha256": "6726e98645168269f7cd10434798ed1d89b9e4146560e99e78d59bfcec497535",
+  "cases": [
+    {
+      "case": "L00-probe",
+      "title": "The plugin loads and its hooks run",
+      "checks": [
+        {
+          "name": "the plugin loaded in the headless session",
+          "status": "PASS"
+        },
+        {
+          "name": "the plugin's MCP tools are present",
+          "status": "PASS"
+        },
+        {
+          "name": "SessionStart ran and reported healthy",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L01-read",
+      "title": "Read is redirected to a tokenized copy",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "Read returned content",
+          "status": "PASS"
+        },
+        {
+          "name": "Read result holds markers for all 4 values",
+          "status": "PASS"
+        },
+        {
+          "name": "PreToolUse redirected the Read to a shadow copy",
+          "status": "PASS"
+        },
+        {
+          "name": "the model repeated a marker verbatim",
+          "status": "PASS"
+        },
+        {
+          "name": "the tool result does not show the shadow path",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L02-bash-ok",
+      "title": "An allowed simple Bash command runs, and its output is filtered",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "a simple command matched by an allow rule in settings.local.json ran without a prompt",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook's own decision was allow, by the user's rule (step 7)",
+          "status": "PASS"
+        },
+        {
+          "name": "Bash output holds markers",
+          "status": "PASS"
+        },
+        {
+          "name": "the output filter ran",
+          "status": "PASS"
+        },
+        {
+          "name": "API key in the output was replaced",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L03-bash-fail",
+      "title": "A failing Bash command is filtered too (PostToolUse cannot do this)",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the failing command's result reached the model as an error",
+          "status": "PASS"
+        },
+        {
+          "name": "its output holds markers, not values",
+          "status": "PASS"
+        },
+        {
+          "name": "the real error message is kept",
+          "status": "PASS"
+        },
+        {
+          "name": "the exit code is the command's own",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L04-bash-cd",
+      "title": "cd persists across separate Bash calls",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "three Bash calls ran",
+          "status": "PASS"
+        },
+        {
+          "name": "`cd` in one call carried over to the next",
+          "status": "PASS"
+        },
+        {
+          "name": "the file in the new directory was readable and filtered",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L05-bash-exit-trap",
+      "title": "Output of an EXIT trap cannot bypass the filter",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the command ran",
+          "status": "PASS"
+        },
+        {
+          "name": "output printed by an EXIT trap went through the filter",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L06-bash-colour",
+      "title": "A value split by colour codes is still replaced",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the command ran and matched",
+          "status": "PASS"
+        },
+        {
+          "name": "a value split by colour codes was replaced",
+          "status": "PASS"
+        },
+        {
+          "name": "colour codes present in the raw result (were they suppressed by NO_COLOR?)",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L18-bash-marker-ask",
+      "title": "A Bash command containing a marker asks first (restore_in_bash=ask)",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model put a marker into a Bash command",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook asked for permission instead of restoring silently",
+          "status": "PASS"
+        },
+        {
+          "name": "headless: the command was not auto-approved",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the transcript, the result record, permission_denials, stderr, the debug log or the guard log",
+          "status": "PASS"
+        },
+        {
+          "name": "the command Claude Code recorded holds the marker",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L19-bash-marker-allow",
+      "title": "With restore_in_bash=allow the runner restores the marker; records keep it",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the program received the real value (grep counted 1 line)",
+          "status": "PASS"
+        },
+        {
+          "name": "the runner restored the marker, and the hook did not ask about it",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook allowed it by the user's rule (step 7)",
+          "status": "PASS"
+        },
+        {
+          "name": "the transcript shows the command with the marker only",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the transcript, the result record, permission_denials, stderr, the debug log or the guard log",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L25-bash-nasty-value",
+      "title": "A value full of shell syntax is restored as inert data",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the program received exactly the hostile value, as one argument (grep -cxF counted 1)",
+          "status": "PASS"
+        },
+        {
+          "name": "nothing inside the value ran (no PWNED file)",
+          "status": "PASS"
+        },
+        {
+          "name": "the runner restored it",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the transcript, the result record, permission_denials, stderr, the debug log or the guard log",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L21-bash-complex",
+      "title": "A command that is not simple asks (headless: denied), whatever the allow rules",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook asked because the command is not a single simple command (step 6)",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L22-bash-denied",
+      "title": "A command matched by a deny rule is denied",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook denied it by the project's deny rule (step 2)",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        },
+        {
+          "name": "the file is still there",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L23-bash-ask-rule",
+      "title": "A command matched by an ask rule asks (headless: denied)",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook asked by the project's ask rule (step 3)",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L24-bash-untrusted-project-allow",
+      "title": "An allow rule in the shared project settings is not applied to an untrusted folder",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook found no applicable allow rule (step 8): Bash(wc *) is only in .claude/settings.json, and this folder was never trusted",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L26-bash-read-deny",
+      "title": "A Read deny rule stops an allowed Bash command that names the file",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook denied it by the Read deny rule, although Bash(cat *) is allowed (step 2)",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L27-bash-read-deny-directory",
+      "title": "An allowed Bash command over a directory that holds the denied file asks (headless: denied)",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook asked because a Read rule covers something in that directory (step 8, firm)",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L28-bash-read-deny-quoted-glob",
+      "title": "A partly quoted glob that would reach the denied file is not allowed (headless: denied)",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook asked because the command is not plain (step 6); with a deny rule present that ask holds in every permission mode",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L29-bash-marker-unlisted-program",
+      "title": "A marker for a program that is not on the restore list is refused, although a Bash allow rule matches",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the model made the Bash call with a marker",
+          "status": "PASS"
+        },
+        {
+          "name": "the hook refused to restore a marker for a program that is not on the list",
+          "status": "PASS"
+        },
+        {
+          "name": "the command did not run (argdump recorded nothing)",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the transcript, the result record, permission_denials, stderr, the debug log or the guard log",
+          "status": "PASS"
+        },
+        {
+          "name": "what the model was told",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L07-grep",
+      "title": "Grep output is replaced after the tool ran",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "Grep returned matches",
+          "status": "PASS"
+        },
+        {
+          "name": "PostToolUse replaced the values in the Grep result",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L08-write-restore",
+      "title": "Markers are restored when Claude writes a file",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "contact.txt was created",
+          "status": "PASS"
+        },
+        {
+          "name": "the file on disk holds the real value, not a marker",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L09-edit-tool",
+      "title": "edit_with_markers edits a line that holds a marker",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the plugin's edit tool was available and called",
+          "status": "PASS"
+        },
+        {
+          "name": "the line holding a marker was edited on disk with the real value kept",
+          "status": "PASS"
+        },
+        {
+          "name": "no marker was written to disk",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L10-write-over-read",
+      "title": "Write over an existing file that was read through a shadow copy",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "Write over a file that was read through a shadow copy succeeded",
+          "status": "PASS"
+        },
+        {
+          "name": "every real value is back on disk, no markers",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L11-edit-plain-line",
+      "title": "Built-in Edit on a line without markers, after a redirected Read",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "built-in Edit on a marker-free line of a shadow-read file worked",
+          "status": "PASS"
+        },
+        {
+          "name": "the Edit result shown to the model holds no real value",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L12-plain-file",
+      "title": "Files without values are left alone",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "a file without personal data is read and edited as usual",
+          "status": "PASS"
+        },
+        {
+          "name": "its Read was not redirected",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L13-at-file",
+      "title": "@file mention of a file holding values is blocked",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the UserPromptSubmit hook ran and blocked",
+          "status": "PASS"
+        },
+        {
+          "name": "the model produced no answer",
+          "status": "PASS"
+        },
+        {
+          "name": "how the blocked run ended",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L14-prompt-pii",
+      "title": "A prompt that contains a value is blocked",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the UserPromptSubmit hook ran and blocked",
+          "status": "PASS"
+        },
+        {
+          "name": "the model produced no answer",
+          "status": "PASS"
+        },
+        {
+          "name": "how the blocked run ended",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L15-subagent",
+      "title": "A subagent's Read is protected as well",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the subagent result came back",
+          "status": "PASS"
+        },
+        {
+          "name": "hooks fired for the subagent's own Read",
+          "status": "PASS"
+        },
+        {
+          "name": "the subagent reported markers",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L16-engine-broken",
+      "title": "With a corrupt vault at session start nothing is processed (fail closed)",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "the engine reported itself unhealthy",
+          "status": "PASS"
+        },
+        {
+          "name": "the prompt was not processed (blocked before the model)",
+          "status": "PASS"
+        },
+        {
+          "name": "no tool ran while the engine was broken",
+          "status": "PASS"
+        },
+        {
+          "name": "prompt hook events",
+          "status": "INFO"
+        }
+      ]
+    },
+    {
+      "case": "L17-engine-breaks-mid-session",
+      "title": "When the vault breaks mid-session, later tool calls are refused",
+      "checks": [
+        {
+          "name": "no real value in any tool result sent to the model",
+          "status": "PASS"
+        },
+        {
+          "name": "the model never wrote a real value",
+          "status": "PASS"
+        },
+        {
+          "name": "no real value in the plugin's logs or shadow copies",
+          "status": "PASS"
+        },
+        {
+          "name": "permission denials in this run",
+          "status": "INFO"
+        },
+        {
+          "name": "the vault was corrupted during the session",
+          "status": "PASS"
+        },
+        {
+          "name": "tool calls after the break were attempted",
+          "status": "PASS"
+        },
+        {
+          "name": "every later tool call was refused",
+          "status": "PASS"
+        },
+        {
+          "name": "PreToolUse denied them",
+          "status": "PASS"
+        },
+        {
+          "name": "the model was told why",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "case": "L28-keychain",
+      "title": "OPTIONAL: the vault key in the real OS key store (Keychain / Secret Service)",
+      "checks": [
+        {
+          "name": "first start creates the vault and its key store entry without failing",
+          "status": "PASS",
+          "detail": "0.1 s (includes any Keychain prompt you had to answer); DataFog guard: on. Vault: DATAFOG_VAULT_DIR, encrypted, key in the system key store. Bash output: filtered. Markers in Bash commands: ask. Detecting: EMAIL, PHO"
+        },
+        {
+          "name": "the new vault's key store entry exists",
+          "status": "PASS",
+          "detail": ""
+        },
+        {
+          "name": "status reports the key store as the key's home",
+          "status": "PASS",
+          "detail": ""
+        },
+        {
+          "name": "no key file lies beside the vault",
+          "status": "PASS",
+          "detail": "workspace.enc, workspace.lock"
+        },
+        {
+          "name": "a second process opens the vault with the stored key and tokenizes",
+          "status": "PASS",
+          "detail": ""
+        },
+        {
+          "name": "fifteen more hook processes get the same marker (no prompt each time?)",
+          "status": "PASS",
+          "detail": ""
+        },
+        {
+          "name": "wall time of one PostToolUse hook process with the key from the key store",
+          "status": "INFO",
+          "detail": "p50 71 ms, max 79 ms over 15 runs"
+        },
+        {
+          "name": "the address is not readable anywhere in the vault directory",
+          "status": "PASS",
+          "detail": ""
+        },
+        {
+          "name": "purge removed the vault and its key store entry",
+          "status": "PASS",
+          "detail": "The vault was deleted. Its key was removed from the operating system's key store. Markers issued before now can no longer be restored. A new, empty vault is created on next use."
+        }
+      ]
+    }
+  ]
+}

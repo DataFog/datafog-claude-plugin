@@ -185,7 +185,7 @@ def test_every_hook_entry_blocks_on_failure_and_uses_the_launcher():
 
 def test_manifests():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["name"] == "datafog" and plugin["version"] == "0.2.0"
+    assert plugin["name"] == "datafog" and plugin["version"] == "0.2.1"
     options = plugin["userConfig"]
     assert options["keep_vault_on_uninstall"]["type"] == "boolean" and options["keep_vault_on_uninstall"]["default"] is True
     assert options["unscannable_file_policy"]["options"] == ["ask", "deny", "allow"]
@@ -207,8 +207,8 @@ def test_commands_exist_and_purge_cannot_be_invoked_by_the_model():
 
 
 def test_dependency_pin_is_the_same_everywhere():
-    assert CORE_REQUIREMENT == "datafog-core>=1.7.0,<1.8"
-    assert VAULT_REQUIREMENT == "datafog-fogvault>=1.7.0,<1.8"
+    assert CORE_REQUIREMENT == "datafog-core==1.7.0"
+    assert VAULT_REQUIREMENT == "datafog-fogvault==1.7.0"
     bootstrap = (ROOT / "scripts" / "bootstrap.sh").read_text()
     assert f"CORE_REQUIREMENT='{CORE_REQUIREMENT}'" in bootstrap and f"VAULT_REQUIREMENT='{VAULT_REQUIREMENT}'" in bootstrap
     project = (ROOT / "pyproject.toml").read_text()
@@ -258,13 +258,17 @@ def test_engine_has_no_third_party_imports_besides_core_and_its_vault():
                 assert name.split(".")[0] in allowed, f"{path.name} imports {name}"
 
 
-def test_hook_start_up_does_not_import_heavy_modules(box):
-    code = ("import sys, io, json\n"
+def test_hook_start_up_does_not_import_unrelated_heavy_modules(box):
+    code = ("import sys, io, json, importlib.metadata\n"
+            "importlib.metadata.version('datafog-core')\n"
+            # Metadata checking uses email/urllib, and socket on Python 3.10/3.12.
+            # Compare with that actual stdlib baseline rather than interpreter-specific exceptions.
+            "metadata_imports = {name.split('.')[0] for name in sys.modules}\n"
             "sys.stdin = io.StringIO(json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': 'Glob', 'tool_input': {}}))\n"
             "from datafog_guard import hook\nhook.main()\n"
             "heavy = {'subprocess', 'asyncio', 'http', 'urllib', 'email', 'ssl', 'socket', 'logging', 'argparse',"
             " 'multiprocessing', 'concurrent', 'unittest', 'xml', 'sqlite3', 'ctypes'}\n"
-            "print(sorted(heavy & {name.split('.')[0] for name in sys.modules}))\n")
+            "print(sorted(heavy & ({name.split('.')[0] for name in sys.modules} - metadata_imports)))\n")
     import sys
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=box.env())
     assert result.stdout.strip().endswith("[]"), result.stdout + result.stderr
@@ -316,3 +320,49 @@ def test_session_start_without_any_way_to_install_says_what_to_run(box):
     assert "Tool calls are blocked" in out["systemMessage"]
     log = (box.data / "log" / "bootstrap.log").read_text()
     assert "no Python 3.10 or later found" in log
+
+
+def test_matching_stamp_with_wrong_versions_and_failed_reinstall_stays_blocked(box):
+    import sys
+
+    environment = box.data / "venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True)
+    python = environment / "bin" / "python"
+    site = subprocess.check_output([str(python), "-I", "-c",
+                                    "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True).strip()
+    from pathlib import Path
+    marker = box.tmp / "unreviewed-import-ran"
+    for name, version in (("datafog_core", "9.9.9"), ("datafog_fogvault", "9.9.9")):
+        metadata = Path(site) / f"{name}-{version}.dist-info"
+        metadata.mkdir()
+        (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
+        (Path(site) / f"{name}.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n__version__ = {version!r}\n")
+    stamp = environment / ".datafog-installed"
+    stamp.write_text(f"{CORE_REQUIREMENT} {VAULT_REQUIREMENT}")
+    empty = box.tmp / "emptybin"
+    empty.mkdir()
+    for tool in ("sh", "cat", "mkdir", "chmod", "find", "rmdir", "rm", "date", "sed", "printf", "dirname", "sleep",
+                 "uname", "getconf"):
+        found = shutil.which(tool)
+        if found:
+            (empty / tool).symlink_to(found)
+    installer = empty / "uv"
+    installer.write_text("#!/bin/sh\nexit 1\n")   # deterministic offline/install failure
+    installer.chmod(0o700)
+    env = box.env(PATH=str(empty))
+    launcher = ["sh", str(ROOT / "scripts" / "datafog-guard"), "--data-dir", str(box.data)]
+    result = subprocess.run([*launcher, "session-start"], input=json.dumps(
+        {"hook_event_name": "SessionStart", "source": "startup"}).encode(), capture_output=True, env=env, timeout=30)
+    assert "NOT protecting" in json.loads(result.stdout)["systemMessage"]
+    assert not stamp.exists(), "a failed verification/install must invalidate the previous success stamp"
+    assert not marker.exists(), "metadata mismatch must be caught before importing either dependency"
+    result = subprocess.run([*launcher, "hook"], input=json.dumps(
+        {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "notes.txt"}}).encode(),
+        capture_output=True, env=env, timeout=30)
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert b"dependency_version_mismatch" in result.stdout
+    assert not marker.exists()
+    doctor = subprocess.run([*launcher, "doctor"], capture_output=True, env=env, timeout=30)
+    assert b"[FAIL] detector library: dependency_version_mismatch" in doctor.stdout
+    assert f"[ok  ] detector library ({CORE_REQUIREMENT})".encode() not in doctor.stdout

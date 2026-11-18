@@ -128,6 +128,47 @@ def test_edit_refuses_paths_outside_the_project_and_inside_storage(box, client):
     assert outside.read_text() == NOTES
 
 
+@pytest.mark.parametrize("scope", ["user", "project", "local"])
+@pytest.mark.parametrize("tool", ["Read", "Edit"])
+@pytest.mark.parametrize("kind", ["deny", "ask"])
+def test_edit_respects_file_permissions_in_every_scope(box, client, scope, tool, kind):
+    path = box.write("protected.txt", "original")
+    box.claude_settings(scope, {kind: [f"{tool}(./protected.txt)"]})
+    text, error = client.call(EDIT, file_path=str(path), old_string="original", new_string="changed")
+    assert error and f"{tool} {kind} rule" in text
+    assert path.read_text() == "original"
+
+
+def test_edit_checks_alias_and_real_target_permissions(box, client):
+    target = box.write("protected.txt", "original")
+    link = box.project / "alias.txt"
+    link.symlink_to(target)
+    for rule in ("Edit(./protected.txt)", "Read(./alias.txt)"):
+        box.claude_settings("local", {"deny": [rule]})
+        text, error = client.call(EDIT, file_path=str(link), old_string="original", new_string="changed")
+        assert error and "deny rule" in text
+        assert target.read_text() == "original" and link.is_symlink()
+
+
+@pytest.mark.parametrize("settings", ['{"permissions":', {"deny": ["Edit(../secret)"]}])
+def test_edit_refuses_unreadable_or_unsupported_permissions(box, client, settings):
+    path = box.write("notes.txt", "original")
+    box.claude_settings("user", settings)
+    text, error = client.call(EDIT, file_path=str(path), old_string="original", new_string="changed")
+    assert error and "Refused" in text
+    assert path.read_text() == "original"
+
+
+def test_edit_reloads_rules_between_calls_and_allows_uncovered_files(box, client):
+    path = box.write("notes.txt", "original")
+    box.claude_settings("local", {"deny": ["Read(./other.txt)"]})
+    _, error = client.call(EDIT, file_path=str(path), old_string="original", new_string="first")
+    assert not error
+    box.claude_settings("local", {"deny": ["Edit(./notes.txt)"]})
+    text, error = client.call(EDIT, file_path=str(path), old_string="first", new_string="second")
+    assert error and "deny rule" in text and path.read_text() == "first"
+
+
 def test_edit_through_a_shadow_path_edits_the_real_file(box, client):
     path = box.write("notes.txt", NOTES)
     out, _ = box.pre("Read", {"file_path": str(path)})
@@ -145,6 +186,149 @@ def test_edit_keeps_permissions_and_crlf(box, client):
     assert not error
     assert path.read_bytes() == f"a\r\nemail {EMAIL}\r\nz\r\n".encode()
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+
+
+def test_edit_internal_symlink_updates_target_without_replacing_link(box, client):
+    target = box.write("target.txt", "original")
+    link = box.project / "alias.txt"
+    link.symlink_to(target)
+    _, error = client.call(EDIT, file_path=str(link), old_string="original", new_string="updated")
+    assert not error and link.is_symlink() and target.read_text() == "updated"
+
+
+@pytest.mark.parametrize("change", ["in_place", "replace", "symlink", "remove"])
+def test_edit_snapshot_refuses_intervening_file_changes(box, change):
+    from datafog_guard.mcp_server import EditableFile, ToolError
+
+    path = box.write("target.txt", "original")
+    other = box.write("other.txt", "new save")
+    with EditableFile(str(path), str(box.project), 1024) as target:
+        assert target.read() == b"original"
+        if change == "in_place":
+            path.write_text("new save")   # same length: size alone is insufficient
+        elif change == "replace":
+            os.replace(other, path)
+        else:
+            path.unlink()
+            if change == "symlink":
+                path.symlink_to(other)
+        with pytest.raises(ToolError, match="changed while preparing"):
+            target.replace(b"plugin edit")
+    assert not list(box.project.glob("*.tmp"))
+    if change != "remove":
+        assert path.read_text() == "new save"
+    else:
+        assert not path.exists()
+
+
+def test_edit_snapshot_refuses_replaced_parent_directory(box):
+    from datafog_guard.mcp_server import EditableFile, ToolError
+
+    (box.project / "nested").mkdir()
+    path = box.write("nested/target.txt", "original")
+    with EditableFile(str(path), str(box.project), 1024) as target:
+        target.read()
+        path.parent.rename(box.project / "moved")
+        path.parent.mkdir()
+        path.write_text("new save")
+        with pytest.raises(ToolError, match="changed while preparing"):
+            target.replace(b"plugin edit")
+    assert path.read_text() == "new save"
+    assert (box.project / "moved" / "target.txt").read_text() == "original"
+    assert not list(box.project.rglob("*.tmp"))
+
+
+def test_edit_snapshot_refuses_retargeted_alias_before_reading(box):
+    from datafog_guard.mcp_server import EditableFile, ToolError
+
+    original = box.write("original.txt", "original")
+    other = box.tmp / "outside.txt"
+    other.write_text("outside")
+    link = box.project / "alias.txt"
+    link.symlink_to(original)
+    target = EditableFile(str(link), str(box.project), 1024)
+    link.unlink()
+    link.symlink_to(other)
+    with target:
+        with pytest.raises(ToolError, match="changed while preparing"):
+            target.read()
+    assert original.read_text() == "original" and other.read_text() == "outside"
+
+
+def test_server_refuses_alias_retargeted_between_permission_check_and_open(box, monkeypatch):
+    from datafog_guard import ccperms
+    from datafog_guard.mcp_server import Server
+
+    for key, value in box.env().items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    safe = box.write("safe.txt", "original")
+    denied = box.write("denied.txt", "original")
+    link = box.project / "alias.txt"
+    link.symlink_to(safe)
+    box.claude_settings("local", {"deny": ["Edit(./denied.txt)"]})
+    original_check = ccperms.check_file_path
+    first = True
+
+    def retarget_after_check(*args, **kwargs):
+        nonlocal first
+        result = original_check(*args, **kwargs)
+        if first:
+            first = False
+            link.unlink()
+            link.symlink_to(denied)
+        return result
+
+    monkeypatch.setattr(ccperms, "check_file_path", retarget_after_check)
+    result = Server().call_tool({"name": EDIT, "arguments": {
+        "file_path": str(link), "old_string": "original", "new_string": "changed"}})
+    assert result["isError"] and "changed while preparing" in result["content"][0]["text"]
+    assert safe.read_text() == "original" and denied.read_text() == "original"
+
+
+def test_edit_snapshot_serializes_cooperating_editors(box):
+    from datafog_guard.mcp_server import EditableFile, ToolError
+
+    path = box.write("target.txt", "original")
+    with EditableFile(str(path), str(box.project), 1024) as first:
+        first.read()
+        with pytest.raises(ToolError, match="another process"):
+            with EditableFile(str(path), str(box.project), 1024):
+                pytest.fail("the same original file must not be edited concurrently")
+        first.replace(b"first edit")
+    with EditableFile(str(path), str(box.project), 1024) as second:
+        assert second.read() == b"first edit"
+        second.replace(b"second edit")
+    assert path.read_text() == "second edit"
+
+
+def test_edit_snapshot_read_remains_bounded_if_file_grows(box, monkeypatch):
+    from datafog_guard.mcp_server import EditableFile, ToolError
+
+    path = box.write("target.txt", "small")
+    with EditableFile(str(path), str(box.project), 10) as target:
+        original_read = os.read
+        read_bytes = 0
+
+        def growing_read(fd, size):
+            nonlocal read_bytes
+            path.write_bytes(b"x" * 100)
+            result = original_read(fd, size)
+            read_bytes += len(result)
+            return result
+
+        monkeypatch.setattr(os, "read", growing_read)
+        with pytest.raises(ToolError, match="too large"):
+            target.read()
+        assert read_bytes == 11
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires Unix FIFO")
+def test_edit_refuses_fifo_without_waiting_for_a_writer(box, client):
+    path = box.project / "pipe"
+    os.mkfifo(path)
+    text, error = client.call(EDIT, file_path=str(path), old_string="old", new_string="new")
+    assert error and "not a regular file" in text
 
 
 def test_long_lived_server_sees_markers_created_after_it_started(box, client):

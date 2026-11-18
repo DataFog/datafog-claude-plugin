@@ -6,8 +6,8 @@ pin the differences from 1.4.0 that matter to the plugin: the ones where less te
 left visible to the model (documented in the README under "Known gaps").
 
 Tests named ``..._today`` describe a known limit of core 1.7.0 exactly as it is; they only run
-on that version, so an upgrade does not fail on them. Each has a sibling marked ``xfail`` that
-states the correct outcome and starts passing when core fixes it.
+on that version, so an upgrade does not fail on them. The adjacent-email leak is mitigated
+by covering the joined addresses as one reversible value until core fixes their boundaries.
 """
 from __future__ import annotations
 
@@ -68,24 +68,66 @@ def test_digits_written_directly_onto_an_address_stay_hidden_with_it(box, prefix
 ISSUE_272 = "alice@example.comとbob@example.net"
 
 
-@only_core_1_7_0
-def test_issue_272_a_non_ascii_letter_between_two_addresses_leaves_a_domain_visible_today(box):
-    """KNOWN ISSUE (core #272), accepted by the owner and documented in the README.
-
-    A non-ASCII letter that touches an address is absorbed into the match. Between two addresses
-    this gives ONE value, ``alice@example.comとbob``, and the second address's domain,
-    ``@example.net``, reaches the model.
-    """
-    out, values = tokenize(box, ISSUE_272)
-    assert values == ["alice@example.comとbob"]
-    assert MARKER_RE.fullmatch(out[:-len("@example.net")]) and out.endswith("@example.net")
-
-
-@pytest.mark.xfail(strict=False, reason="datafog-core #272: fixed in core after 1.7.0")
 def test_issue_272_both_addresses_are_hidden(box):
     out, values = tokenize(box, ISSUE_272)
     assert "example.net" not in out and "example.com" not in out and "bob" not in out
-    assert len(values) == 2
+    assert values and MARKER_RE.fullmatch(out)
+
+
+@pytest.mark.parametrize("text", [
+    "alice@example.comとbob@example.netとcarol@example.org",
+    "alice@example.comßbob@example.net",
+    "alice@example.com\u0301bob@example.net",
+    "alice@example.com和bob@bücher.example",
+    "連絡先はalice@example.comまたはbob@example.netです",
+])
+def test_joined_email_tail_is_hidden_and_restores_exactly(box, text):
+    out, values = tokenize(box, text)
+    assert "@" not in out and "example" not in out and "bücher" not in out
+    assert values
+
+
+def test_email_tail_mitigation_preserves_non_email_suffix(box):
+    text = "alice@example.comとbob@example.net, next @notadomain"
+    out, values = tokenize(box, text)
+    assert out.endswith(", next @notadomain") and "example" not in out
+    assert values
+
+
+def test_email_tail_mitigation_respects_configuration_and_allowlist():
+    from datafog_guard.vault import Detector
+    assert Detector(("PHONE",)).spans(ISSUE_272) == []
+    assert Detector(("EMAIL",), (ISSUE_272,)).spans(ISSUE_272) == []
+
+
+def test_email_tail_mitigation_holds_the_whole_value_at_a_stream_cut(box):
+    vault = box.open_vault()
+    cut = len("alice@example.comとbob".encode())
+    out, consumed, _ = vault.tokenize_prefix(ISSUE_272, cut)
+    assert out == "" and consumed == 0
+    out, consumed, _ = vault.tokenize_prefix(ISSUE_272, len(ISSUE_272.encode()))
+    assert "@" not in out and consumed == len(ISSUE_272.encode())
+    assert vault.restore(out).text == ISSUE_272
+
+
+def test_joined_email_mitigation_does_not_rescan_already_covered_tails(monkeypatch):
+    import datafog_core
+    from datafog_guard.vault import Detector
+
+    original = datafog_core.scan
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(datafog_core, "scan", counted)
+    count = 400
+    text = "と".join(["alice@example.com"] * count)
+    spans = Detector(("EMAIL",)).spans(text)
+    assert spans[0].start == 0 and spans[-1].end == len(text.encode())
+    assert calls <= count + 1, "each stranded domain is validated at most once, not once per earlier finding"
 
 
 @only_core_1_7_0

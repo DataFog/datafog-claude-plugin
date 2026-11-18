@@ -38,10 +38,11 @@ case "$1" in
     # for the engine; the installer's output goes to a log file so it cannot disturb the
     # hook's JSON output.
     mkdir -p "$DATA/log" 2>/dev/null
-    sh "$ROOT/scripts/bootstrap.sh" "$DATA" </dev/null >>"$DATA/log/bootstrap.log" 2>&1
+    BOOTSTRAP_OK=1
+    sh "$ROOT/scripts/bootstrap.sh" "$DATA" </dev/null >>"$DATA/log/bootstrap.log" 2>&1 || BOOTSTRAP_OK=0
     PY="$DATA/venv/bin/python"
     [ -x "$PY" ] || PY="$DATA/venv/Scripts/python.exe"
-    if [ ! -x "$PY" ]; then
+    if [ "$BOOTSTRAP_OK" != 1 ] || [ ! -x "$PY" ]; then
       cat >/dev/null
       if UNSUPPORTED=$(sh "$ROOT/scripts/bootstrap.sh" --platform 2>/dev/null); then :; else
         printf '{"systemMessage": "%s"}\n' "$UNSUPPORTED"

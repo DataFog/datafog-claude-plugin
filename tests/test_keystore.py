@@ -24,9 +24,12 @@ pytestmark = pytest.mark.skipif(
     reason="needs Linux with dbus-run-session, gnome-keyring-daemon and secret-tool (a private Secret Service)")
 
 SESSION = textwrap.dedent("""
-    printf 'synthetic-test-password\\n' | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1
+    set -e
+    printf 'synthetic-test-password\\n' | gnome-keyring-daemon --unlock --components=secrets \
+        --control-directory="$GNOME_KEYRING_CONTROL" >/dev/null 2>&1
     sleep 0.3
-    "$@"
+    test -S "$GNOME_KEYRING_CONTROL/control"
+    exec "$@"
 """)
 PRELUDE = textwrap.dedent("""
     import json, os, subprocess, sys
@@ -58,9 +61,14 @@ def in_private_key_store(tmp_path, script: str, timeout: int = 120) -> dict:
            "HOME": str(root / "home")}
     for name in ("data", "config", "cache", "run"):
         (root / name).mkdir(parents=True, exist_ok=True)
-        env["XDG_%s_%s" % (name.upper(), "DIR" if name == "run" else "HOME")] = str(root / name)
+        env["XDG_RUNTIME_DIR" if name == "run" else f"XDG_{name.upper()}_HOME"] = str(root / name)
     (root / "home").mkdir(exist_ok=True)
     os.chmod(root / "run", 0o700)
+    # gnome-keyring otherwise chooses a temporary control socket and prints its
+    # location. Pin it explicitly so the recovery request reaches this same private daemon.
+    control = root / "run" / "keyring"
+    control.mkdir(mode=0o700)
+    env["GNOME_KEYRING_CONTROL"] = str(control)
     result = subprocess.run(["dbus-run-session", "--", "sh", "-c", SESSION, "sh", sys.executable, "-c",
                              PRELUDE + textwrap.dedent(script), str(tmp_path)],
                             capture_output=True, text=True, env=env, timeout=timeout)
@@ -158,3 +166,104 @@ def test_without_a_reachable_key_store_nothing_is_created_and_the_message_is_cle
         assert "keystore_unavailable: the operating system's key store" in text
     assert "Protection: NOT WORKING" in status and "NOT PROTECTING" in start["systemMessage"]
     assert not (box.vault / "workspace.enc").exists() and not (box.vault / "workspace.key").exists()
+
+
+@pytest.mark.skipif(not shutil.which("gdbus"), reason="needs gdbus to lock and inspect the private collection")
+def test_locked_keyring_fails_closed_without_rekey_or_file_fallback(tmp_path):
+    """Exercise a real Locked collection, not an absent bus or a cached open vault.
+
+    Secret Service Lock/ReadAlias and Collection.Locked:
+    https://specifications.freedesktop.org/secret-service/latest/org.freedesktop.Secret.Service.html
+    https://specifications.freedesktop.org/secret-service/latest/org.freedesktop.Secret.Collection.html
+    """
+    seen = in_private_key_store(tmp_path, r"""
+        import re
+        from pathlib import Path
+
+        service = "org.freedesktop.Secret.Service"
+        collection_interface = "org.freedesktop.Secret.Collection"
+        def call(path, method, *args):
+            result = subprocess.run(["gdbus", "call", "--session", "--dest", "org.freedesktop.secrets",
+                                     "--object-path", path, "--method", method, *args],
+                                    capture_output=True, text=True, check=True, timeout=5)
+            return result.stdout.strip()
+        def locked():
+            result = call(collection, "org.freedesktop.DBus.Properties.Get", collection_interface, "Locked")
+            match = re.search(r"<(true|false)>", result)
+            assert match, "the service did not return a boolean Locked property"
+            return match.group(1) == "true"
+
+        d = os.path.join(base, "vault")
+        first = vault(d)
+        marker, _ = first.tokenize(EMAIL)
+        before_entries = entries()
+        before_header = read_envelope_header(d)
+        before_files = {name: (Path(d) / name).read_bytes() for name in ("workspace.enc", "markers.index")}
+        alias = call("/org/freedesktop/secrets", service + ".ReadAlias", "default")
+        paths = re.findall(r"'(/[^']*)'", alias)
+        assert len(paths) == 1 and paths[0] != "/", "the private default collection must exist"
+        collection = paths[0]
+        found = call("/org/freedesktop/secrets", service + ".SearchItems",
+                     "{'service': '" + KEYSTORE_SERVICE + "'}")
+        item_paths = re.findall(r"'(/[^']*)'", found)
+        assert item_paths and all(path.startswith(collection + "/") for path in item_paths)
+        assert not locked(), "the fixture must first create a usable unlocked keyring"
+        call("/org/freedesktop/secrets", service + ".Lock", "['" + collection + "']")
+        assert locked(), "a successful Lock call alone is not evidence that the keyring is locked"
+
+        # The initial object has a decrypted owner cached. A fresh process is required
+        # to test opening a vault when its key store is locked at session startup.
+        probe = "\n".join([
+            "import json, sys",
+            "from datafog_guard.config import DEFAULT_ENTITIES",
+            "from datafog_guard.errors import GuardError",
+            "from datafog_guard.store import EncryptedStore",
+            "from datafog_guard.vault import Detector, Vault",
+            "try:",
+            "    v = Vault(EncryptedStore(sys.argv[1]), Detector(DEFAULT_ENTITIES))",
+            "    v.health()",
+            "except GuardError as error:",
+            "    print(json.dumps({'code': error.code}))",
+            "else:",
+            "    print(json.dumps({'code': 'opened'}))",
+        ])
+        other = subprocess.run([sys.executable, "-c", probe, d], capture_output=True, text=True, timeout=15)
+        assert other.returncode == 0, "locked-keyring probe crashed instead of returning a guard error"
+        result = json.loads(other.stdout.strip())
+        still_locked = locked()
+        unchanged = all((Path(d) / name).read_bytes() == data for name, data in before_files.items())
+        no_file_key = not (Path(d) / "workspace.key").exists()
+        same_header = read_envelope_header(d) == before_header
+
+        # Unlock only this session's throwaway login collection, then prove the original
+        # mapping still works; no developer login keyring or credential is involved.
+        assert result["code"] == "keystore_unavailable"
+        assert still_locked and unchanged and same_header and no_file_key
+
+        # --unlock starts a daemon; it does not unlock an already-running one.
+        # Use GNOME's control-client UNLOCK protocol against only the fixture socket:
+        # https://github.com/GNOME/gnome-keyring/blob/46.2/daemon/control/gkd-control-client.c
+        import socket, struct
+        password = b"synthetic-test-password\n"
+        packet = struct.pack(">III", 12 + len(password), 1, len(password)) + password
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+            control.settimeout(5)
+            control.connect(os.path.join(os.environ["GNOME_KEYRING_CONTROL"], "control"))
+            control.sendall(b"\0" + packet)  # credentials byte, then framed UNLOCK request
+            response = b""
+            while len(response) < 8:
+                chunk = control.recv(8 - len(response))
+                assert chunk, "private daemon closed its unlock response"
+                response += chunk
+        assert struct.unpack(">II", response) == (8, 0), "private daemon rejected unlock"
+        assert not locked(), "the private collection did not unlock for the recovery check"
+        recovered = vault(d).restore(marker).text == EMAIL
+        print(json.dumps({"code": result["code"], "still_locked": still_locked,
+                          "unchanged": unchanged, "same_header": same_header, "no_file_key": no_file_key,
+                          "same_entries": entries() == before_entries, "recovered": recovered}))
+    """, timeout=75)
+    assert seen["code"] == "keystore_unavailable"
+    assert seen["still_locked"] is True, "the failing open must not silently unlock the collection"
+    assert seen["unchanged"] and seen["same_header"], "the existing vault and marker index must not be rewritten"
+    assert seen["no_file_key"] is True, "a locked key store must never trigger a file-key fallback"
+    assert seen["same_entries"] and seen["recovered"], "unlocking must recover the original key and markers"
