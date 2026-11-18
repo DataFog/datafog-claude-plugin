@@ -240,7 +240,7 @@ def test_hook_start_up_does_not_import_heavy_modules(box):
 @pytest.mark.skipif(os.environ.get("DATAFOG_TEST_NETWORK") != "1", reason="set DATAFOG_TEST_NETWORK=1 to run")
 def test_bootstrap_installs_once_and_the_launcher_then_works(box):
     launcher = ["sh", str(ROOT / "scripts" / "datafog-guard"), "--data-dir", str(box.data), "--vault-dir", str(box.vault)]
-    env = {"PATH": os.environ["PATH"], "HOME": str(box.tmp)}
+    env = {"PATH": os.environ["PATH"], "HOME": str(box.tmp), "DATAFOG_VAULT_KEY": "file"}   # no OS key store in tests
     for name in ("HTTPS_PROXY", "https_proxy", "SSL_CERT_FILE", "UV_NATIVE_TLS", "REQUESTS_CA_BUNDLE", "PIP_CERT",
                  "UV_SYSTEM_CERTS"):
         if name in os.environ:

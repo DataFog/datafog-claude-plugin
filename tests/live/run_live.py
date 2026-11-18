@@ -8,11 +8,24 @@ run-live.command makes one with mktemp -d). Everything is written inside it:
 
     <work-dir>/project   throwaway project of synthetic files (claude's working directory)
     <work-dir>/data      the plugin's data dir for this run (private Python env, logs, shadow copies)
-    <work-dir>/vault     a temporary vault, pre-seeded with the fixture values (DATAFOG_VAULT_DIR)
+    <work-dir>/vault     a temporary vault, pre-seeded with the fixture values (DATAFOG_VAULT_DIR).
+                         Its key is a file in that directory (vault_key=file), so the run never
+                         reads or writes your Keychain or any other key store.
     <work-dir>/log       one stream-json transcript per run, results.md, results.json, status.txt
 
-Your real vault and your real plugin data dir are not touched. The plugin is loaded
-with --plugin-dir from this checkout; it does not have to be installed.
+Your real vault, its key in your key store, and your real plugin data dir are not touched.
+The plugin is loaded with --plugin-dir from this checkout; it does not have to be installed.
+
+Because of that, the default run does NOT cover the path real users take: the vault key in
+the macOS Keychain (or the Secret Service on Linux). That is a separate, optional case:
+
+    LIVE_KEYCHAIN=1 tests/live/run-live.command
+
+It adds case L28-keychain, which creates a second throwaway vault whose key IS stored in your
+real key store (one new entry, service "DataFog.ApplicationVault.v1", account
+"claude-code/<random id>"), uses it from several processes, times it, deletes the vault and
+removes that one entry again. It never reads your real vault's entry. macOS may show a
+Keychain prompt during this case; that prompt is one of the things the case is there to find.
 
 Needs: Python 3.8+ for this script, a logged-in Claude Code 2.1.295 or later, and either
 uv or Python 3.10+ with network access to PyPI (to build the private environment once).
@@ -218,7 +231,7 @@ class Driver:
     def env(self, **extra):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("DATAFOG_") and key != "CLAUDE_CODE_DISABLE_FILE_MENTIONS"}
-        env.update({"DATAFOG_DATA_DIR": self.data, "DATAFOG_VAULT_DIR": self.vault})
+        env.update({"DATAFOG_DATA_DIR": self.data, "DATAFOG_VAULT_DIR": self.vault, "DATAFOG_VAULT_KEY": "file"})
         env.update(extra)
         return env
 
@@ -296,9 +309,16 @@ class Driver:
             code, _, _ = self.timed(["sh", self.launcher, "--data-dir", self.data, "bootstrap"], 600,
                                     stdout=out, stderr=subprocess.STDOUT)
         python = self.engine_python()
+        if code == 3:
+            return "this machine is not supported by the plugin (see log/bootstrap.txt): it needs macOS on " \
+                   "Apple Silicon, or Linux x86_64 with glibc 2.38 or later"
         if code != 0 or not python:
             return "the plugin's Python environment could not be built (see log/bootstrap.txt); " \
                    "it needs uv or Python 3.10+ and access to PyPI"
+        # The key of every vault of this run is a file beside it. The config file says so for the
+        # processes that may not inherit this script's environment (the MCP server).
+        with open(os.path.join(self.data, "config.json"), "w") as handle:
+            json.dump({"vault_key": "file"}, handle)
         seed = (
             "import json, os, sys\n"
             f"sys.path.insert(0, {os.path.join(REPO, 'engine')!r})\n"
@@ -307,8 +327,9 @@ class Driver:
             "vault.health()\n"
             "texts = json.load(sys.stdin)\n"
             "out, counts = vault.tokenize_many(texts[:-1])\n"
-            "nasty = vault._commit([('API_KEY', texts[-1])])[texts[-1]]\n"
+            "nasty = vault._markers_for({texts[-1]: ['API_KEY']})[texts[-1]]\n"
             "back = vault.restore_spans(nasty)[0][0][3]\n"
+            "assert vault.health()['protection'] == 'file_key', 'the live run must not use the key store'\n"
             "print(json.dumps({'tokenized': out, 'counts': counts, 'entries': vault.entry_counts(),\n"
             "                  'entities': list(settings.entities), 'nasty': nasty, 'nasty_ok': back == texts[-1]}))\n")
         texts = []
@@ -331,7 +352,7 @@ class Driver:
         with open(os.path.join(self.log, "seed.json"), "w") as handle:
             json.dump({"entries": seeded["entries"], "entities": seeded["entities"]}, handle, indent=2)
         shutil.copytree(self.vault, self.broken_vault)
-        with open(os.path.join(self.broken_vault, "HEAD"), "w") as handle:
+        with open(os.path.join(self.broken_vault, "workspace.enc"), "w") as handle:
             handle.write("{ deliberately corrupted for the fail-closed case")
         return None
 
@@ -822,7 +843,7 @@ class Driver:
                 if result["name"] == "Bash" and not after:
                     after = True
             denied = [e for e in events if e.get("event") == "PreToolUse" and e.get("decision") == "deny"]
-            with open(os.path.join(self.mid_vault, "HEAD")) as handle:
+            with open(os.path.join(self.mid_vault, "workspace.enc"), errors="replace") as handle:
                 corrupted = handle.read().startswith("corrupt")
             return [
                 ("the vault was corrupted during the session", "PASS" if corrupted else "FAIL",
@@ -836,12 +857,84 @@ class Driver:
         self.mid_vault = os.path.join(self.work, "vault-mid")
         shutil.rmtree(self.mid_vault, ignore_errors=True)
         shutil.copytree(self.vault, self.mid_vault)
-        self.break_script = "printf 'corrupt' > %s\n" % shlex.quote(os.path.join(self.mid_vault, "HEAD"))
+        self.break_script = "printf 'corrupt' > %s\n" % shlex.quote(os.path.join(self.mid_vault, "workspace.enc"))
         self.case("L17-engine-breaks-mid-session", "When the vault breaks mid-session, later tool calls are refused",
                   "Make three tool calls in this order, and make each one even if an earlier one fails. First run "
                   "`sh break-step.sh` with Bash. Then use the Read tool on notes.txt. Then run `cat config.env` "
                   "with Bash. Finally tell me exactly what each call returned.", broken_mid_session,
                   env={"DATAFOG_VAULT_DIR": self.mid_vault})
+
+    # -- the optional key store case ---------------------------------------------------
+    def keychain_case(self):
+        """L28, only with LIVE_KEYCHAIN=1. The one case that uses the real OS key store.
+
+        A second throwaway vault, key mode "keystore". No `claude -p` run: the engine is driven
+        directly, as hooks would. Whatever happens, the vault is purged at the end, which removes
+        the single key store entry this case created."""
+        title = "OPTIONAL: the vault key in the real OS key store (Keychain / Secret Service)"
+        vault = os.path.join(self.work, "vault-keychain")
+        env = self.env(DATAFOG_VAULT_DIR=vault, DATAFOG_VAULT_KEY="keystore")
+        python = self.engine_python()
+        engine = os.path.join(REPO, "engine", "run.py")
+        checks = []
+
+        def engine_run(*argv, stdin=b""):
+            started = time.time()
+            result = subprocess.run([python, "-I", engine, *argv], input=stdin, capture_output=True, env=env,
+                                    cwd=self.project, timeout=180)
+            return result, time.time() - started
+
+        def hook(payload):
+            result, seconds = engine_run("hook", stdin=json.dumps(payload).encode())
+            try:
+                return json.loads(result.stdout or b"null"), seconds
+            except ValueError:
+                return None, seconds
+        try:
+            first, seconds = hook({"hook_event_name": "SessionStart", "source": "startup"})
+            line = (first or {}).get("systemMessage", "")
+            checks.append(("first start creates the vault and its key store entry without failing",
+                           "PASS" if "DataFog guard: on" in line and "system key store" in line else "FAIL",
+                           "%.1f s (includes any Keychain prompt you had to answer); %s" % (seconds, line[:160])))
+            status, _ = engine_run("status")
+            text = status.stdout.decode(errors="replace")
+            checks.append(("status reports the key store as the key's home", "PASS" if "key is in the operating "
+                           "system's key store" in text else "FAIL", ""))
+            checks.append(("no key file lies beside the vault", "PASS" if not os.path.exists(
+                os.path.join(vault, "workspace.key")) else "FAIL", ", ".join(sorted(os.listdir(vault)))))
+            email = "keychain.synthetic@example.com"
+            post = {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "x"},
+                    "tool_response": {"stdout": "contact %s\n" % email, "stderr": "", "interrupted": False,
+                                      "isImage": False, "noOutputExpected": False}, "cwd": self.project}
+            out, _ = hook(post)
+            stdout = ((out or {}).get("hookSpecificOutput") or {}).get("updatedToolOutput", {}).get("stdout", "")
+            checks.append(("a second process opens the vault with the stored key and tokenizes",
+                           "PASS" if "[[EMAIL_" in stdout and email not in stdout else "FAIL", ""))
+            timings = []
+            for _ in range(15):
+                again, seconds = hook(post)
+                timings.append(seconds)
+                same = ((again or {}).get("hookSpecificOutput") or {}).get("updatedToolOutput", {}).get("stdout") == stdout
+            timings.sort()
+            checks.append(("fifteen more hook processes get the same marker (no prompt each time?)",
+                           "PASS" if same else "FAIL", ""))
+            checks.append(("wall time of one PostToolUse hook process with the key from the key store", "INFO",
+                           "p50 %.0f ms, max %.0f ms over 15 runs" % (1000 * timings[7], 1000 * timings[-1])))
+            raw = b"".join(open(os.path.join(vault, name), "rb").read() for name in os.listdir(vault))
+            checks.append(("the address is not readable anywhere in the vault directory",
+                           "PASS" if email.encode() not in raw else "FAIL", ""))
+        except Exception as error:
+            checks.append(("the key store case ran to the end", "FAIL", "%r" % (error,)))
+        finally:
+            purge, _ = engine_run("purge", "--confirm", "DELETE-VAULT")
+            text = purge.stdout.decode(errors="replace")
+            checks.append(("purge removed the vault and its key store entry",
+                           "PASS" if "key was removed from the operating system's key store" in text else "FAIL",
+                           text.strip().replace("\n", " ")[:300]))
+        self.report.append(("L28-keychain", title, checks, None))
+        for name, status, detail in checks:
+            if status == "FAIL":
+                say("    FAIL: %s%s" % (name, " (%s)" % detail if detail else ""))
 
     # -- reporting -----------------------------------------------------------------
     def latency(self):
@@ -969,6 +1062,9 @@ class Driver:
 
         try:
             self.cases()
+            if os.environ.get("LIVE_KEYCHAIN") == "1":
+                say("[L28-keychain] optional: using the real OS key store for a second throwaway vault")
+                self.keychain_case()
         except Exception as error:  # keep whatever was collected and say why it stopped
             import traceback
             frame = traceback.extract_tb(error.__traceback__)[-1]

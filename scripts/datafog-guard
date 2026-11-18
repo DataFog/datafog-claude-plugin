@@ -20,6 +20,7 @@ done
 # A value that still looks like an unexpanded "${NAME}" placeholder counts as not set.
 case "${DATAFOG_DATA_DIR:-}" in '${'*) unset DATAFOG_DATA_DIR ;; esac
 case "${DATAFOG_VAULT_DIR:-}" in '${'*|'') unset DATAFOG_VAULT_DIR ;; esac
+case "${DATAFOG_VAULT_KEY:-}" in '${'*|'') unset DATAFOG_VAULT_KEY ;; esac
 case "${CLAUDE_PLUGIN_DATA:-}" in '${'*) unset CLAUDE_PLUGIN_DATA ;; esac
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
