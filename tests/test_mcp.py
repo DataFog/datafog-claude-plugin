@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 import pytest
-from conftest import CARD, EMAIL, NOTES, PHONE, assert_no_sentinel
+from conftest import CARD, EMAIL, NOTES, PHONE, assert_no_sentinel, corrupt_vault
 
 EDIT = "edit_with_markers"
 
@@ -121,7 +121,7 @@ def test_edit_refuses_paths_outside_the_project_and_inside_storage(box, client):
     link = box.project / "link.txt"
     link.symlink_to(outside)
     box.open_vault().tokenize(EMAIL)
-    for target in (outside, link, box.vault / "HEAD", box.data / "runtime.json", "/etc/hosts",
+    for target in (outside, link, box.vault / "workspace.enc", box.vault / "markers.index", box.data / "runtime.json", "/etc/hosts",
                    box.project / ".." / "outside.txt"):
         text, error = client.call(EDIT, file_path=str(target), old_string="a", new_string="b")
         assert error and "Refused" in text, target
@@ -160,14 +160,13 @@ def test_long_lived_server_sees_markers_created_after_it_started(box, client):
 def test_protection_status_has_types_and_counts_only(box, client):
     box.open_vault().tokenize(NOTES)
     text, error = client.call("protection_status")
-    assert not error and "Protection: ON" in text and "1 EMAIL" in text and "NONE in this version" in text
+    assert not error and "Protection: ON" in text and "1 EMAIL" in text and "encryption at rest: encrypted" in text
     assert str(box.vault) not in text, "the model does not need the vault path"
 
 
 def test_server_with_a_broken_vault_reports_without_details(box):
     box.write("notes.txt", NOTES)
-    box.vault.mkdir()
-    (box.vault / "HEAD").write_text("corrupt " + EMAIL)
+    corrupt_vault(box.vault, b"corrupt " + EMAIL.encode())
     client = Client(box)
     text, error = client.call(EDIT, file_path=str(box.project / "notes.txt"), old_string="End", new_string="Fin")
     assert error and "vault_corrupt" in text and "Nothing was changed" in text

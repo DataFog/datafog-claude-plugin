@@ -428,6 +428,8 @@ class Vault:
         markers: dict[str, str] = {}
         pending = []
         for value in wanted:
+            if not value.strip():
+                raise TokenizeError("a value of only white space cannot be stored", "empty_value")
             marker = known.marker_of.get(value) if known is not None else None
             if marker is not None:
                 markers[value] = marker        # byte-exact: it was read back from the vault

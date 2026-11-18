@@ -7,19 +7,20 @@ import shutil
 import subprocess
 
 import pytest
-from conftest import EMAIL, NOTES, ROOT, assert_no_sentinel
-from datafog_guard import CORE_REQUIREMENT, config
+from conftest import EMAIL, NOTES, ROOT, assert_no_sentinel, corrupt_vault
+from datafog_guard import CORE_REQUIREMENT, VAULT_REQUIREMENT, config
 
 
 def text_of(result) -> str:
     return result.stdout.decode() + result.stderr.decode()
 
 
-def test_status_names_types_counts_and_the_missing_encryption(box):
+def test_status_names_types_counts_and_how_the_vault_is_encrypted(box):
     box.open_vault().tokenize(NOTES)
     out = text_of(box.run("status"))
     assert "Protection: ON" in out and "Values held in the vault: 5" in out and "1 EMAIL" in out
-    assert "encryption at rest: NONE" in out and str(box.vault) in out and "set by DATAFOG_VAULT_DIR" in out
+    assert "encryption at rest: encrypted, but the key is a file beside the data" in out
+    assert str(box.vault) in out and "set by DATAFOG_VAULT_DIR" in out and "WARNING" not in out
     assert "Not detected: names of people" in out
     assert_no_sentinel(out)
 
@@ -51,10 +52,11 @@ def test_purge_needs_the_confirmation_word(box):
 def test_doctor_reports_each_check_and_fails_on_a_broken_vault(box):
     out = text_of(box.run("doctor"))
     for line in ("[ok  ] Python 3.10 or later", "[ok  ] detector library", "[ok  ] tokenize and restore round trip",
-                 "[ok  ] vault directory is owner-only", "[note] vault encryption at rest: none"):
+                 "[ok  ] vault directory is owner-only", "[ok  ] vault files are owner-only", "[ok  ] vault library",
+                 "[ok  ] supported machine", "[note] vault encryption at rest: encrypted, but the key is a file"):
         assert line in out, out
     assert_no_sentinel(out)
-    (box.vault / "HEAD").write_text("corrupt")
+    corrupt_vault(box.vault)
     broken = box.run("doctor")
     assert broken.returncode == 1 and "[FAIL] vault and detector: vault_corrupt" in text_of(broken)
 
@@ -171,8 +173,13 @@ def test_commands_exist_and_purge_cannot_be_invoked_by_the_model():
 
 def test_dependency_pin_is_the_same_everywhere():
     assert CORE_REQUIREMENT == "datafog-core>=1.7.0,<1.8"
-    assert f"REQUIREMENT='{CORE_REQUIREMENT}'" in (ROOT / "scripts" / "bootstrap.sh").read_text()
-    assert f'"{CORE_REQUIREMENT}"' in (ROOT / "pyproject.toml").read_text()
+    assert VAULT_REQUIREMENT == "datafog-fogvault>=1.7.0,<1.8"
+    bootstrap = (ROOT / "scripts" / "bootstrap.sh").read_text()
+    assert f"CORE_REQUIREMENT='{CORE_REQUIREMENT}'" in bootstrap and f"VAULT_REQUIREMENT='{VAULT_REQUIREMENT}'" in bootstrap
+    project = (ROOT / "pyproject.toml").read_text()
+    assert f'"{CORE_REQUIREMENT}"' in project and f'"{VAULT_REQUIREMENT}"' in project
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert f'"{CORE_REQUIREMENT}" "{VAULT_REQUIREMENT}"' in workflow
 
 
 def test_launcher_ignores_modules_in_the_working_directory():
@@ -201,10 +208,10 @@ def test_shell_scripts_parse():
             assert subprocess.run([shell, "-n", str(ROOT / "scripts" / "wrap.sh")]).returncode == 0
 
 
-def test_engine_has_no_third_party_imports_besides_core():
+def test_engine_has_no_third_party_imports_besides_core_and_its_vault():
     import ast
     import sys
-    allowed = set(sys.stdlib_module_names) | {"datafog_core", "datafog_guard"}
+    allowed = set(sys.stdlib_module_names) | {"datafog_core", "datafog_fogvault", "datafog_guard"}
     for path in (ROOT / "engine" / "datafog_guard").glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             names = []
@@ -243,7 +250,7 @@ def test_bootstrap_installs_once_and_the_launcher_then_works(box):
     out = json.loads(first.stdout)
     assert "DataFog guard: on" in out["systemMessage"], (box.data / "log" / "bootstrap.log").read_text()
     stamp = box.data / "venv" / ".datafog-installed"
-    assert stamp.read_text() == CORE_REQUIREMENT
+    assert stamp.read_text() == f"{CORE_REQUIREMENT} {VAULT_REQUIREMENT}"
     before = stamp.stat().st_mtime_ns
     import time
     started = time.time()
@@ -262,7 +269,8 @@ def test_session_start_without_any_way_to_install_says_what_to_run(box):
     payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup"}).encode()
     empty = box.tmp / "emptybin"
     empty.mkdir()
-    for tool in ("sh", "cat", "mkdir", "chmod", "find", "rmdir", "rm", "date", "sed", "printf", "dirname", "sleep"):
+    for tool in ("sh", "cat", "mkdir", "chmod", "find", "rmdir", "rm", "date", "sed", "printf", "dirname", "sleep",
+                 "uname", "getconf"):
         found = shutil.which(tool)
         if found:
             (empty / tool).symlink_to(found)

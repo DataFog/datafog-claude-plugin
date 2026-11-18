@@ -58,6 +58,10 @@ class Sandbox:
         self.project.mkdir()
         self.home.mkdir()
         self.extra_env: dict[str, str] = {}
+        # The vault key of every test vault is a file in the throwaway vault directory, never the
+        # operating system's key store. Set the way a user would: in the plugin's config file,
+        # which the hooks, the Bash runner and the MCP server all read (env() sets it as well).
+        (self.data / "config.json").write_text(json.dumps({"vault_key": "file"}), encoding="utf-8")
 
     def env(self, **extra) -> dict:
         env = {key: value for key, value in os.environ.items()
@@ -196,6 +200,15 @@ def seed_values(vault, pairs) -> dict:
     markers = vault._commit(pairs)
     vault.store.add_to_index(list(markers.values()))
     return markers
+
+
+def corrupt_vault(directory, content: bytes = b"corrupt") -> None:
+    """Replace the encrypted vault file by something that is not one."""
+    directory = Path(directory)
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / "workspace.enc"
+    path.write_bytes(content)
+    os.chmod(path, 0o600)
 
 
 def copy_vault(source: Path, target: Path) -> None:

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 import pytest
-from conftest import API_KEY, CARD, EMAIL, ENGINE, NOTES, PHONE, ROOT, SSN, assert_no_sentinel
+from conftest import API_KEY, CARD, EMAIL, ENGINE, NOTES, PHONE, ROOT, SSN, assert_no_sentinel, corrupt_vault
 from datafog_guard import bashwrap, config
 
 SHELLS = [shell for shell in ("bash", "zsh") if shutil.which(shell)]
@@ -198,7 +198,7 @@ def test_exit_inside_the_command(same):
 def test_filter_that_cannot_start_means_the_command_does_not_run(same):
     marker = same.box.tmp / "ran"
     same.box.vault.mkdir()
-    (same.box.vault / "HEAD").write_text("corrupt")
+    corrupt_vault(same.box.vault)
     result = same.run(f"touch {marker}; echo {EMAIL}")
     assert result.returncode == 125 and not marker.exists(), "fail closed: the command must not have run"
     assert result.stdout == b"" and b"command was not run" in result.stderr

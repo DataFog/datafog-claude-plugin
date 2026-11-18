@@ -183,7 +183,7 @@ def test_pre_read_of_a_clean_file_passes_untouched(box):
     assert not (box.data / "shadow").exists()
 
 
-def test_pre_read_uses_recall_for_values_the_detector_misses(box):
+def test_pre_read_hides_known_values_the_detector_misses(box):
     box.open_vault().tokenize("account number 000123456789")
     path = box.write("bare.txt", "ref 000123456789\n")
     new = pre_updated(box.pre("Read", {"file_path": str(path)})[0])
@@ -228,7 +228,7 @@ def test_pre_read_unscannable_policy_is_configurable(box, policy, expected):
 
 def test_pre_read_of_the_vault_is_denied(box):
     box.open_vault().tokenize(EMAIL)
-    out, _ = box.pre("Read", {"file_path": str(box.vault / "HEAD")})
+    out, _ = box.pre("Read", {"file_path": str(box.vault / "workspace.enc")})
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
@@ -527,13 +527,16 @@ def test_pre_bash_own_status_command_is_not_wrapped(box):
 
 def test_pre_calls_that_reach_into_the_vault_are_denied(box):
     box.open_vault().tokenize(EMAIL)
-    for tool, tool_input in [("Bash", {"command": f"cat {box.vault}/snapshots/*"}),
-                             ("Bash", {"command": f"strings '{box.vault}/HEAD' | head"}),
+    for tool, tool_input in [("Bash", {"command": f"cat {box.vault}/*"}),
+                             ("Bash", {"command": f"strings '{box.vault}/workspace.key' | head"}),
+                             ("Read", {"file_path": str(box.vault / "workspace.key")}),
+                             ("Read", {"file_path": str(box.vault / "markers.index")}),
+                             ("Read", {"file_path": str(box.vault / "bash-restore.key")}),
                              ("Grep", {"pattern": "example", "path": str(box.vault)}),
                              ("Grep", {"pattern": "example", "path": str(box.tmp)}),
-                             ("Glob", {"pattern": "**/*", "path": str(box.vault / "snapshots")}),
-                             ("Write", {"file_path": str(box.vault / "HEAD"), "content": "x"}),
-                             ("Edit", {"file_path": str(box.vault / "meta.json"), "old_string": "a", "new_string": "b"})]:
+                             ("Glob", {"pattern": "**/*", "path": str(box.vault)}),
+                             ("Write", {"file_path": str(box.vault / "workspace.enc"), "content": "x"}),
+                             ("Edit", {"file_path": str(box.vault / "markers.index"), "old_string": "a", "new_string": "b"})]:
         out, _ = box.pre(tool, tool_input)
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny", (tool, tool_input)
     out, _ = box.pre("Grep", {"pattern": "example", "path": str(box.project)})
@@ -671,9 +674,9 @@ def test_session_start_explains_markers_and_reports_status(box):
         assert needle in context
     assert len(context) < 10_000
     line = out["systemMessage"]
-    assert "DataFog guard: on" in line and "not encrypted" in line and "EMAIL" in line
+    assert "DataFog guard: on" in line and "encrypted, key in a file beside it (weaker)" in line and "EMAIL" in line
     assert "Bash output: filtered" in line and "Markers in Bash commands: ask" in line
-    assert (box.vault / "HEAD").exists(), "the vault is created at session start"
+    assert (box.vault / "workspace.enc").exists(), "the vault is created at session start"
     assert json.loads((box.data / "runtime.json").read_text()) == {"keep_vault_on_uninstall": "true"}
 
 

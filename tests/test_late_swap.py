@@ -489,9 +489,9 @@ def runner(box, receivers, request) -> Runner:
 def seeded(box):
     """marker -> value for every nasty value a real vault accepts.
 
-    The vault stores what it gives back on restore: core refuses a value that is only whitespace
-    and normalises a tab or carriage return inside a value to a blank. The runner is checked
-    against the value the vault returns."""
+    Every value is stored so that it comes back byte for byte (core compares values loosely, so a
+    value that differs from an earlier one only in white space or case gets a variant label). Core
+    refuses a value that is only white space. The runner is checked against what the vault returns."""
     from datafog_guard.errors import GuardError
     vault = box.open_vault()
     stored = {}
@@ -499,7 +499,7 @@ def seeded(box):
         if not value:
             continue
         try:
-            marker = vault._commit([("ACCOUNT_NUMBER", value)])[value]
+            marker = vault._markers_for({value: ["ACCOUNT_NUMBER"]})[value]
         except GuardError:
             continue
         stored[marker] = vault.restore_spans(marker)[0][0][3]
@@ -598,7 +598,7 @@ def test_a_command_cannot_get_values_by_starting_the_runner_itself(runner, seede
 
 def test_restore_off_never_restores_even_with_a_ticket(runner, seeded):
     marker = next(m for m, value in seeded.items() if value == "a b")
-    (runner.box.data / "config.json").write_text('{"restore_in_bash": "off"}')
+    (runner.box.data / "config.json").write_text('{"restore_in_bash": "off", "vault_key": "file"}')
     result, _ = runner.run(f"dump 0 '{marker}'")
     assert result.returncode == 0 and runner.receivers.got(0) == marker.encode() + b"\0"
 
