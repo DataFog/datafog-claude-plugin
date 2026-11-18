@@ -271,13 +271,19 @@ class Session:
         if case == "L25-bash-nasty-value":
             seen = self.call("Read", {"file_path": path("handoff.txt")})
             value = self.line(seen, "Deploy token").split(": ", 1)[-1]
-            return self.call("Bash", {"command": "./argdump %s" % value})
+            return self.call("Bash", {"command": "grep -cxF -- %s nasty.txt" % value})
         if case == "L21-bash-complex":
             return self.call("Bash", {"command": "cat config.env | head -2"})
         if case == "L22-bash-denied":
             return self.call("Bash", {"command": "rm scratch.tmp"})
         if case == "L23-bash-ask-rule":
             return self.call("Bash", {"command": "git push origin main"})
+        if case == "L28-bash-read-deny-quoted-glob":
+            return self.call("Bash", {"command": 'cat "s"ecret.en*'})
+        if case == "L29-bash-marker-unlisted-program":
+            seen = self.call("Read", {"file_path": path("notes.txt")})
+            value = self.line(seen, "Primary contact").split(": ", 1)[-1]
+            return self.call("Bash", {"command": "./argdump %s" % value})
         if case == "L26-bash-read-deny":
             return self.call("Bash", {"command": "cat secret.env"})
         if case == "L27-bash-read-deny-directory":

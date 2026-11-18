@@ -46,7 +46,10 @@ def status_report(for_model: bool = False) -> str:
                  + f"; background Bash: {settings.background_bash}")
     lines.append(f"Markers in Bash commands: {settings.restore_in_bash} (ask = you approve each command; "
                  "allow = restored silently; off = never restored). Values are put in by the runner when the "
-                 "command starts; the command Claude Code shows and records keeps the markers")
+                 "command starts; the command Claude Code shows and records keeps the markers. Only plain "
+                 "commands made of a short list of programs (grep, cat, sort, printf ...) get values")
+    lines.append("Extra programs you vouched for (restore_programs_extra): "
+                 + (", ".join(sorted(settings.restore_programs_extra)) or "none"))
     lines.append("Bash permissions: decided by the plugin from your Claude Code allow, ask and deny rules "
                  "(see /datafog:doctor for what it can read)")
     lines.append(f"Files that cannot be checked: {settings.unscannable_policy}")
@@ -157,7 +160,7 @@ def doctor() -> int:
         state = bashwrap.key_state(settings.vault_dir)
         check("key that authorises restoring markers in Bash commands", state != "damaged",
               {"ok": "", "missing": "not created yet; the first command with a marker creates it",
-               "damaged": "the key file is empty or too short; it is replaced the next time a command with a "
+               "damaged": "the key file is not a 32-byte key; it is replaced the next time a command with a "
                           "marker is checked (or delete bash-restore.key in the vault directory)"}[state])
     except Exception as error:
         check("key that authorises restoring markers in Bash commands", False, safe_code(error))
@@ -195,6 +198,13 @@ def doctor() -> int:
             check("Claude Code permission rules", None, detail)
         for note in rules.notes:
             check("Claude Code permission rules", None, note)
+        unsupported = [rule for rule in rules.paths if rule.unsupported]
+        if unsupported:
+            check("Read/Edit rules the plugin can interpret", False,
+                  f"{len(unsupported)} rule(s) have a pattern with a .. segment (in: "
+                  + ", ".join(sorted({rule.source for rule in unsupported})) + "). The plugin cannot say what "
+                  "they cover, so no Bash command is approved without a prompt until they are rewritten "
+                  "without ..")
     except Exception as error:
         check("Claude Code permission rules", False, safe_code(error))
     found = _claude_version()

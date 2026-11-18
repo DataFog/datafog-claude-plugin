@@ -242,7 +242,8 @@ def _restore(command: str, ticket: str | None, vault, settings):
         found, _ = vault.restore_spans(command)
         if found:
             spans = [shellsub.Span(*item) for item in found]
-            text = shellsub.substitute(command, spans, shellsub.shell_kind(pick_shell())).text
+            text = shellsub.substitute(command, spans, shellsub.shell_kind(pick_shell()),
+                                       settings.restore_programs_extra).text
             for span in spans:
                 counts[span.entity] = counts.get(span.entity, 0) + 1
     return text.encode("utf-8", "surrogateescape"), counts
