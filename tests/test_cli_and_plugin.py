@@ -170,7 +170,7 @@ def test_commands_exist_and_purge_cannot_be_invoked_by_the_model():
 
 
 def test_dependency_pin_is_the_same_everywhere():
-    assert CORE_REQUIREMENT == "datafog-core>=1.4.0,<1.5"
+    assert CORE_REQUIREMENT == "datafog-core>=1.7.0,<1.8"
     assert f"REQUIREMENT='{CORE_REQUIREMENT}'" in (ROOT / "scripts" / "bootstrap.sh").read_text()
     assert f'"{CORE_REQUIREMENT}"' in (ROOT / "pyproject.toml").read_text()
 

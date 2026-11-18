@@ -30,7 +30,7 @@ lists every such point. Read [Known gaps](#known-gaps) before you rely on it.
 - macOS or Linux, with `sh` and `bash` or `zsh`. Windows is not supported in this version.
 - `uv`, or Python 3.10 or later with `pip`, and access to PyPI on first start. The plugin
   builds a private Python environment in its data directory and installs one dependency,
-  `datafog-core>=1.4.0,<1.5`. Detection runs locally; nothing is sent anywhere.
+  `datafog-core>=1.7.0,<1.8`. Detection runs locally; nothing is sent anywhere.
 
 ## Install
 
@@ -62,17 +62,25 @@ Off by default because they are noisy in code, and can be turned on: `DATE`,
 Once a value is in the vault it is also recognised wherever it appears again, even
 where the scanner alone would miss it (for example an account number without its label).
 
+An e-mail address is replaced without the text joined in front of it: in
+`user=ada&email=ada@example.com`, `1042|Ada|ada@example.com|active` or a URL query string,
+the marker stands for the address only (core 1.4 took part of the surrounding text into
+the value). Digits written directly onto an address with no separator
+(`12345ada@example.com`) are still part of the value.
+
 **Not detected:**
 
 - **Names of people.** Free-text names are not detected at all.
 - **Addresses without a label**, and anything else that has no recognisable format.
-- **Many credential formats.** `API_KEY` covers the formats core 1.4 knows (for example
+- **Many credential formats.** `API_KEY` covers the formats core 1.7 knows (for example
   GitHub and Stripe keys). In our checks it did not find AWS access keys, OpenAI
   project keys, Slack tokens or `password=...` assignments. Do not treat this plugin as
   a secret scanner.
 - Routing numbers, NPIs and account numbers need a label next to them
   (`routing number 021000021`) the first time they are seen.
 - Anything inside images and PDFs.
+- Some e-mail addresses and phone numbers in particular surroundings; see
+  [Known gaps](#known-gaps) 18 and 19.
 
 ## How each path is protected
 
@@ -448,6 +456,25 @@ Ways a real value can still reach the model or leave a trace.
 17. **A value restored into a Bash command is visible in the process list** for as long as
     a program the command started holds it as an argument, and a value that starts with `-`
     may be read as an option. See [Markers in Bash commands](#markers-in-bash-commands).
+18. **KNOWN ISSUE: an e-mail domain can reach the model when a non-ASCII letter touches the
+    address** ([datafog-core #272](https://github.com/DataFog/datafog-core/issues/272),
+    present in core 1.5.0 to 1.7.0). A letter or digit outside ASCII written directly against
+    an address, with no space or punctuation between, is read as part of the address. For a
+    single address that only makes the marker cover a little more (`連絡先ada@example.com`
+    becomes one marker). **Between two addresses it leaks:** `alice@example.comとbob@example.net`
+    is read as one value, `alice@example.comとbob`, and the model sees
+    `[[EMAIL_…]]@example.net`: the second person's real domain. This happens in text written
+    without spaces (Japanese, Chinese, Thai, also `…@a.example.orgßname@…`). A space, a
+    full-width space or punctuation such as `。` or `：` between the letter and the address
+    avoids it. The plugin does not work around this; it is fixed in core after 1.7.0 and
+    goes away with the next core release the plugin moves to.
+19. **Phone numbers core 1.7 does not report, which core 1.4 did.** They pass to the model
+    unchanged: a dotted number directly after a digit and a dot (`2.415.555.0134`, read as a
+    decimal); after a digit and a comma, a number whose only separator is one dot
+    (`2,415.5550134`); and a number wrapped across a line break (`(415)` at the end of one
+    line and `555-0134` on the next). A `+` number wrapped across a line break is replaced
+    only up to the break (`+44 20 7946` / `0958` leaves `0958`). `3.415-555-0134` and CSV
+    rows such as `2,415-555-0134` are found.
 
 Behaviour worth knowing that is not a leak:
 
@@ -670,7 +697,7 @@ Results land in `.live/results/results.md`.
 ## Development
 
 ```sh
-uv venv && uv pip install "datafog-core>=1.4.0,<1.5" pytest ruff mypy
+uv venv && uv pip install "datafog-core>=1.7.0,<1.8" pytest ruff mypy
 DATAFOG_TEST_NETWORK=1 .venv/bin/python -m pytest    # the flag enables tests that build the private environment
 .venv/bin/ruff check . && .venv/bin/mypy
 ```

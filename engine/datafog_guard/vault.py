@@ -11,7 +11,7 @@ Order of a tokenization, which must not change:
 
 If any step fails, an exception is raised and no text is released.
 
-Facts about core 1.4 this module is built around (all checked against the real library):
+Facts about core 1.7 this module is built around (all checked against the real library):
 
 * ``prepare`` and ``recall`` reject text holding marker-like strings the vault does not
   know, so markers are obtained by preparing a small text made of the distinct values

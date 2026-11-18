@@ -9,7 +9,7 @@
 
 DATA=$1
 FORCE=$2
-REQUIREMENT='datafog-core>=1.4.0,<1.5'
+REQUIREMENT='datafog-core>=1.7.0,<1.8'
 STAMP="$DATA/venv/.datafog-installed"
 
 venv_python() {
