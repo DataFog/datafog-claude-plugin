@@ -388,10 +388,13 @@ class Driver:
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", case)
         path = os.path.join(self.log, "runs", "%s-%s.jsonl" % (number, safe))
         env = dict(env or {})
+        # Keep real auth/Home, but load only the fixture settings: unrelated user hooks can fail
+        # or interfere with DataFog startup. Plugin MCP still loads normally.
         argv = [self.claude, "-p", prompt + " [case:%s]" % case, "--plugin-dir", REPO,
                 "--debug-file", os.path.join(self.log, "debug", number + ".log"),
                 "--output-format", "stream-json", "--verbose", "--max-turns", "12",
-                "--permission-mode", mode] + (self.extra_flags if flags is None else flags) + \
+                "--permission-mode", mode, "--setting-sources", "project,local"] + \
+               (self.extra_flags if flags is None else flags) + \
                ["--tools", "Read,Write,Edit,Bash,Grep,Glob,Agent", "--allowedTools"] + self.allowed_tools()
         if os.environ.get("LIVE_MODEL"):
             argv += ["--model", os.environ["LIVE_MODEL"]]
@@ -1091,7 +1094,8 @@ class Driver:
         say("[probe] is claude authenticated?")
         path = os.path.join(self.log, "runs", "00-probe-auth.txt")
         with open(path, "wb") as out_file:
-            code, _, _ = self.timed([self.claude, "-p", "Reply with exactly: LIVE_OK", "--max-turns", "1"], 90,
+            code, _, _ = self.timed([self.claude, "-p", "Reply with exactly: LIVE_OK", "--max-turns", "1",
+                                    "--setting-sources", "project,local"], 90,
                                     cwd=self.project, env=self.env(DATAFOG_VAULT_DIR=self.vault), stdout=out_file,
                                     stderr=subprocess.STDOUT)
         with open(path, encoding="utf-8", errors="replace") as handle:

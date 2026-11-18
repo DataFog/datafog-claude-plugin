@@ -25,7 +25,7 @@ Linux needs a working Secret Service, or an explicit, weaker file-key setting. I
 Linux ARM/musl/older glibc and Windows are unsupported. Unsupported machines and unavailable
 key stores block tool calls. See [Supported machines](#supported-machines) for details.
 
-**Status: 0.2.0 release candidate; validation in progress.** See [Known gaps](#known-gaps) and
+**Version 0.2.0.** See [Known gaps](#known-gaps) and
 [Not verified yet](#not-verified-yet) before relying on it.
 
 ## Requirements
@@ -821,7 +821,9 @@ is uninstalled":
 `/datafog:purge` deletes the vault file, the marker index, the ticket key, the key file if
 there is one, and the entry in the key store (on macOS with `security
 delete-generic-password`, on Linux with `secret-tool`, because core has no call for it; if
-that fails, purge tells you the service and account to delete by hand).
+that fails, purge exits with failure and tells you the service and account to delete by hand).
+Local deletion errors also return failure; purge never reports a complete deletion after an
+error, and it never follows a vault or legacy snapshot symlink into another folder.
 
 If the vault is deleted, every marker issued from it is meaningless. Text that still
 holds markers (a file Claude wrote through another tool, notes, old transcripts) can
@@ -864,8 +866,9 @@ Wall time of one whole process (starting Python, opening the vault, the work), m
 
 Starting Python alone is 11 ms of each. With 19,000 values in the vault a rewrite takes
 about 220 ms (150 ms before) and a Bash command with a marker about 320 ms (185 ms before),
-because core reads and decrypts the whole vault for each operation. **The macOS Keychain
-was not measured** (no Mac was available for this build); the optional live case below does.
+because core reads and decrypts the whole vault for each operation. The optional macOS
+Keychain case below measures full-process hook time and checks key creation and removal.
+Release notes record the results of the release run.
 
 ## Commands
 
@@ -919,18 +922,15 @@ to a default in silence.
 
 ## Not verified yet
 
-The mechanisms below were shown to work in the spike with a stand-in implementation, or
-are new in this build. None has been run in a live session with this engine.
-`tests/live/` settles them.
+The release uses the full automated suite and `tests/live/` against real headless Claude
+Code, including the optional macOS Keychain check. Release notes record the results.
+The live driver loads only its project/local fixture settings so unrelated user hooks and
+plugins do not interfere; it keeps the real login and DataFog MCP tools. Headless checks
+cannot settle every interactive or operating-system behavior below.
 
-- Read redirect, Write restore and Grep/MCP output replacement with the real engine.
 - The Bash runner inside Claude Code: that `cd` carries over between calls, that Claude
   Code collects all output, and that a cancelled or timed-out command is stopped.
-- The Bash runner on macOS. It was tested on Linux with bash 5 and zsh 5.9 only: process
-  re-parenting, the `/dev/fd` and `/dev/tty` behaviour and bash 3.2 are untested there
-  (including `read -d ''`, which the child shell uses to receive the command).
-- **Bash permissions, all of it against live Claude Code.** The decision logic is tested
-  against the documentation, not against Claude Code:
+- **Interactive Bash permissions and modes beyond the headless cases:**
   - that a hook `allow` runs a rewritten command without a prompt, in an interactive
     session and in `claude -p`;
   - what the permission prompt for a hook `ask` looks like, that it shows the command with
@@ -952,20 +952,11 @@ are new in this build. None has been run in a live session with this engine.
     documented examples, and which Bash commands it applies those rules to itself;
   - managed settings: whether a server-managed or MDM policy is in force (invisible to the
     plugin), in which case Claude Code ignores the managed settings *file* the plugin reads.
-- **The macOS Keychain, all of it.** The key-store mode was run on Linux against a private
-  GNOME Keyring only. On a Mac, to be checked by hand or with the optional live case
-  (`LIVE_KEYCHAIN=1`, below): that creating the entry at first start does not prompt; whether
-  macOS asks "python wants to use your confidential information" when a hook reads the key,
-  how often, and what "Always Allow" does; whether the question comes back after the
-  plugin's Python is updated or its private environment is rebuilt (the Keychain ties its
-  permission to the program that created the entry, and that program is the Python in the
-  plugin's data directory); what happens while the Keychain is locked, in an SSH session and
-  right after login; how long reading the key takes in a hook; that a hook waiting on a
-  Keychain question ends as a blocked call and not as an unprotected one; and that
-  `/datafog:purge` removes the entry (`security delete-generic-password`).
+- **Other macOS Keychain states.** The optional live case checks creation, repeated reads,
+  full-process timing and purge. It does not test a locked Keychain, SSH access, access
+  immediately after login, or whether prompts return after updating Python or rebuilding
+  the private environment. The Keychain ties access to the program using the entry.
 - The Secret Service with KWallet, and with a keyring that is locked when a session starts.
-- Whether Claude Code lets Write or Edit change a file that was read through a redirected
-  copy (its read-before-write check may not count that read).
 - What the built-in Edit tool's result shows the model after the plugin replaced it.
 - That the plugin's MCP server receives the project directory and starts on first install.
 - How a blocked prompt and an `ask` decision look to you.
