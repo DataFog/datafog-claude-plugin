@@ -599,7 +599,7 @@ class Runner:
 
     def __init__(self, box, receivers: Bin, shell: str):
         self.box, self.receivers, self.shell = box, receivers, shell
-        (box.data / "config.json").write_text('{"restore_programs_extra": ["dump", "sdump", "rc", "psprobe"]}')
+        (box.data / "config.json").write_text('{"vault_key": "file", "restore_programs_extra": ["dump", "sdump", "rc", "psprobe"]}')
         self.plugin, self.settings = standin_plugin(box)
 
     def run(self, command: str, *, ticket: object = True, env: dict | None = None, timeout: int = 600):
