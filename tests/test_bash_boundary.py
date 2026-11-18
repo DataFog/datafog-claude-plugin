@@ -10,7 +10,10 @@ which leaked through EXIT traps, saved file descriptors and /proc.
 from __future__ import annotations
 
 import os
+import select
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -235,12 +238,60 @@ def test_known_residual_sweeping_proc_for_any_process_of_the_user(box):
     "nohup sh -c 'sleep 6; cat s.txt' >/dev/stdout 2>&1 & echo started",
 ])
 def test_background_job_writing_after_the_command_returned(hooked, command):
-    started = time.time()
-    result = hooked.run(command, timeout=40)
-    took = time.time() - started
+    # Time the real command, not the separate PreToolUse/Python initialization. Record
+    # the producer's clock so a delayed parent read cannot restart or shorten the bound.
+    clock = hooked.box.write("drain-clock.py", "import os, time\nfrom pathlib import Path\n"
+                             "Path('drain-start').write_text(f'{time.monotonic()} {os.getpgrp()}')\n")
+    script = hooked.command(f"{shlex.quote(sys.executable)} {shlex.quote(str(clock))}; {command}")
+    process = subprocess.Popen(["sh", "-c", '"$0" -c "$1"', hooked.shell, script],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+                               cwd=hooked.box.project, start_new_session=True,
+                               env={"PATH": os.environ["PATH"], "HOME": str(hooked.box.tmp),
+                                    "SHELL": shutil.which(hooked.shell)})
+    finished = False
+    try:
+        startup_deadline = time.monotonic() + 40
+        first = b""
+        while not first.endswith(b"\n") and len(first) < 1024:
+            remaining = startup_deadline - time.monotonic()
+            assert remaining > 0 and select.select([process.stdout], [], [], remaining)[0], \
+                "the command never reached its readiness marker"
+            byte = process.stdout.read(1)
+            if not byte:
+                break
+            first += byte
+        assert first == b"started\n", first
+        stamp, _ = (hooked.box.project / "drain-start").read_text().split()
+        started = float(stamp)
+        remaining = started + 5.5 - time.monotonic()
+        assert remaining > 0, "the command's 5.5s bound expired before readiness was observed"
+        try:
+            out, err = process.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            pytest.fail("the background-output drain exceeded 5.5s from the producer's start timestamp")
+        took = time.monotonic() - started
+        result = subprocess.CompletedProcess(process.args, process.returncode, first + out, err)
+        finished = True
+    finally:
+        if not finished:
+            # The runner's command has its own session. Its monitor may have exited
+            # after the foreground command, so killing the outer group alone is insufficient.
+            groups = {process.pid}
+            try:
+                _, group = (hooked.box.project / "drain-start").read_text().split()
+                groups.add(int(group))
+            except (OSError, ValueError):
+                pass
+            for group in groups:
+                assert group > 0 and group != os.getpgrp(), "cleanup must only target this fixture's private groups"
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.communicate(timeout=10)
     assert result.returncode == 0 and b"started" in result.stdout
     assert_no_sentinel(captured(result))
-    assert took < 5.5, "the wait for background output is bounded"
+    assert took < 5.5, "the wait for background output is bounded from command start"
     time.sleep(max(0, 7 - took) if "sleep 6" in command else 0)   # let the job finish: it must not find a way out
 
 

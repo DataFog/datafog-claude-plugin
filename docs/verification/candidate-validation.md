@@ -54,10 +54,23 @@ unlock protocol. All six private keyring tests passed in an isolated Ubuntu 24.0
 container, including locked-state refusal, no rekey or file-key fallback, and recovery
 of the original marker. See [Linux keyring evidence](linux-keyring.md).
 
-The revised four-way platform matrix must pass before submission. Final fixture
-and evidence commit `fe1bd1c` is being tested by
-[run 44368890375](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44368890375).
-Its strict manifest job passed; platform tests remain pending. Local lint and mypy
+The corrected candidate `fe1bd1c` passed its complete four-way matrix in
+[run 44368890375](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44368890375):
+Linux Python 3.10/3.12 each had **2,609 passed, 3 skipped**; macOS Python 3.10/3.12
+each had **2,569 passed, 43 skipped**. Strict manifests, shell parsing, lint and
+types also passed. These results include the corrected keyring and actual `/bin/sh`
+fixtures; no failed case was marked expected or skipped to obtain this result.
+
+The documentation follow-up `3497286` was tested by
+[run 44369937374](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44369937374).
+Its manifests and both Linux jobs passed, as did macOS Python 3.12. macOS Python
+3.10 had 2,568 passed, 43 skipped and one failure: the background-output test
+measured 6.232 seconds against a 5.5-second bound. Its no-sentinel and successful
+command assertions passed. The original aggregate timer included hook/runner startup. The corrected test uses
+a producer-side monotonic timestamp and retains the 5.5-second bound; ten focused
+cases pass, and disabling grace still fails that bound. Exact CI-stage attribution
+remains unknown. See [diagnosis and controls](background-drain-timing.md); the earlier
+green run does not override the failed run, and revised CI remains required. Local lint and mypy
 pass on 21 engine modules. The previous run for `276b2b3` was cancelled after its
 Linux fixture failure once the corrected candidate run started; it is not green evidence.
 
@@ -74,3 +87,8 @@ marker preservation and retention, with cache hashes checked against the candida
 Public release URLs, the portal's final scan/review, and directory publication remain
 gated on the owner's instruction. Environment-specific limitations are retained in
 the [readiness inventory](../readiness.md); green tests do not erase those limits.
+
+Current release-gate status and exact head are maintained in [PR #3](https://github.com/DataFog/datafog-claude-plugin/pull/3).
+Historical results above must not be substituted for successful checks on the current
+head when test or runtime code changes. Documentation-only result recording does not
+change the tested runtime; any such difference must remain explicit.

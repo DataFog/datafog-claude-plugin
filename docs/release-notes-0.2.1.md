@@ -25,11 +25,12 @@ Independent review reproduced and verified fixes for an alias-retarget permissio
 race and repeated email-tail scanning. Cached 0.2.1 model sessions passed Read,
 Bash, marker-aware edit and outside-project refusal, with installed production-file
 hashes matching the candidate. The 0.2.0 → 0.2.1 upgrade retained marker identity.
-Candidate evidence is recorded below; the final CI matrix remains open.
+Candidate evidence is recorded below. Current release-gate status and the exact
+reviewed head are maintained in [PR #3](https://github.com/DataFog/datafog-claude-plugin/pull/3).
 
 ## Candidate validation
 
-Candidate `fe1bd1c848880fc4c3c6015c136d5fd9ff28c1e0` retains the production files
+Tested candidate `34972866ac011d3789aad5f0915a646bd188616c` retains the production files
 from live-tested `aa99659a0f3218c443a6fcbc17dbeb9e43537574` unchanged.
 
 - Main real-Claude suite: 187 PASS, 24 INFO, no failures or cap skips.
@@ -42,8 +43,10 @@ from live-tested `aa99659a0f3218c443a6fcbc17dbeb9e43537574` unchanged.
   recovery without rekeying or file-key fallback.
 - Local lint, types and strict manifests passed. The actual `/bin/sh` fallback's
   27 cases passed after diagnosing an unrelated standalone Apple dash crash.
-- The [final CI matrix](https://github.com/DataFog/datafog-claude-plugin/actions/runs/44368890375)
-  is still running; this candidate is not yet declared ready to release.
+- The corrected-candidate four-way matrix passed at `fe1bd1c`. A subsequent
+  documentation-only run exposed a background-drain test timing failure; its
+  investigation and correction are retained in the validation report. Require all
+  checks on the current PR head to pass before release.
 
 See [candidate validation](verification/candidate-validation.md) for original
 failed runs, corrections, evidence links and scope. These results do not imply

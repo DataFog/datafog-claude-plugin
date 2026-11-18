@@ -73,7 +73,7 @@ Bundled `assets/datafog-icon-512.png` is the 512×512 PNG linked by the official
 
 **Documentation:** `https://github.com/DataFog/datafog-claude-plugin#readme`.
 
-**Support:** `https://github.com/DataFog/datafog-claude-plugin/issues`; do not put personal data or credentials in public issues. Private security reports: `https://github.com/DataFog/datafog-claude-plugin/security/advisories/new` (enabled and verified by the root workstream). Portal contact is populated; mailbox ownership remains unverified.
+**Support:** `https://github.com/DataFog/datafog-claude-plugin/issues`; do not put personal data or credentials in public issues. Private security reports: `https://github.com/DataFog/datafog-claude-plugin/security/advisories/new` (enabled and verified by the root workstream). Portal contact matches the authenticated Gmail profile, confirming mailbox access; no portal verification badge or test delivery is claimed.
 
 **Privacy policy:** `https://github.com/DataFog/datafog-claude-plugin/blob/main/PRIVACY.md` (authored locally; URL becomes live after push). **License:** Apache-2.0.
 
