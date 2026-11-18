@@ -242,6 +242,16 @@ def test_a_damaged_or_lost_marker_index_heals_and_never_blocks(box):
     assert box.open_vault().entry_counts() == {"EMAIL": 1, "PHONE": 1}
 
 
+def test_a_fifo_marker_index_is_refused_without_waiting_for_a_writer(box):
+    box.open_vault().tokenize(EMAIL)
+    index = box.vault / "markers.index"
+    index.unlink()
+    os.mkfifo(index, mode=0o600)
+    with pytest.raises(VaultError) as caught:
+        box.open_vault().tokenize(EMAIL)
+    assert caught.value.code == "vault_insecure"
+
+
 def test_purge(box):
     from datafog_guard import bashwrap
     vault = box.open_vault()

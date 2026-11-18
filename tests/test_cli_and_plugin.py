@@ -76,6 +76,14 @@ def test_purge_command_fails_when_the_key_store_entry_remains(box, monkeypatch, 
     assert "key could not be removed" in capsys.readouterr().out
 
 
+def test_purge_command_can_remove_a_fifo_in_place_of_the_vault(box):
+    box.vault.mkdir(mode=0o700)
+    os.mkfifo(box.vault / "workspace.enc", mode=0o600)
+    result = box.run("purge", "--confirm", "DELETE-VAULT")
+    assert result.returncode == 0 and "The vault was deleted" in text_of(result)
+    assert not (box.vault / "workspace.enc").exists()
+
+
 def test_doctor_reports_each_check_and_fails_on_a_broken_vault(box):
     out = text_of(box.run("doctor"))
     for line in ("[ok  ] Python 3.10 or later", "[ok  ] detector library", "[ok  ] tokenize and restore round trip",

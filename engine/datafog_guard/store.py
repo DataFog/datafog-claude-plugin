@@ -193,11 +193,17 @@ def vault_path(directory: str) -> str:
 
 def read_envelope_header(directory: str) -> dict | None:
     """What the encrypted file says about itself in the clear: ids, revision, key mode. No key needed."""
+    fd = None
     try:
-        with open(os.path.join(directory, ENVELOPE), "rb") as handle:
-            head = handle.read(512)
+        fd = os.open(os.path.join(directory, ENVELOPE), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return {"state": "vault_insecure"}
+        head = os.read(fd, 512)
     except OSError:
         return None
+    finally:
+        if fd is not None:
+            os.close(fd)
     return _parse_envelope_header(head)
 
 
@@ -490,11 +496,19 @@ class EncryptedStore:
 
     def read_index(self) -> list[str]:
         """The markers issued from the open vault, oldest first. Empty when the index is another vault's."""
+        fd = None
         try:
-            with open(self._index_path, "rb") as handle:
+            fd = os.open(self._index_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise VaultError("the marker index is not a regular file", "vault_insecure")
+            with os.fdopen(fd, "rb") as handle:
+                fd = None
                 lines = handle.read().decode("ascii", "replace").split("\n")
         except OSError:
             return []
+        finally:
+            if fd is not None:
+                os.close(fd)
         if lines[0] != _INDEX_HEADER + str(self.vault_id()):
             return []
         return list(dict.fromkeys(line for line in lines[1:] if MARKER_RE.fullmatch(line)))
