@@ -51,6 +51,7 @@ class Settings:
         self.background_bash = "deny"               # "deny" | "allow"
         self.egress_policy = "ask"                  # "ask" | "deny" | "allow"
         self.restore_in_mcp_input = False
+        self.vault_key = "keystore"                 # "keystore" | "file" (weaker: the key lies beside the data)
         # Programs the USER vouches for: "this program treats its arguments as data". Read from
         # config.json in the plugin data dir and from DATAFOG_RESTORE_PROGRAMS_EXTRA only.
         self.restore_programs_extra: frozenset[str] = frozenset()
@@ -159,7 +160,7 @@ ENV_OVERRIDES = {
     "DATAFOG_RESTORE_IN_BASH": "restore_in_bash",
     "DATAFOG_BACKGROUND_BASH": "background_bash",
     "DATAFOG_EGRESS_POLICY": "egress_policy",
-    "DATAFOG_RECALL_REQUIRED": "recall_required",
+    "DATAFOG_VAULT_KEY": "vault_key",
     "DATAFOG_MAX_SCAN_BYTES": "max_scan_bytes",
     "DATAFOG_KEEP_VAULT_ON_UNINSTALL": "keep_vault_on_uninstall",
 }
@@ -247,6 +248,11 @@ def load() -> Settings:
             value = "off" if key == "restore_in_bash" else "deny"
         setattr(settings, key, value)
     settings.restore_in_mcp_input = _truthy(merged.get("restore_in_mcp_input"), False)
+    vault_key = str(merged.get("vault_key", "keystore")).strip().lower()
+    if vault_key not in ("keystore", "file"):
+        problems.append("vault_key must be keystore or file")
+        vault_key = "keystore"
+    settings.vault_key = vault_key
     # Not taken from runtime.json or plugin options: only the user's own config file and environment.
     extra = os.environ.get("DATAFOG_RESTORE_PROGRAMS_EXTRA") or own_config.get("restore_programs_extra")
     if extra is not None:

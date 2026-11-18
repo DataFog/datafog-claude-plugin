@@ -4,8 +4,14 @@
 #
 # It runs tests/live/run_live.py from this checkout in a fresh temp dir: about 29 short
 # headless `claude -p` runs against a throwaway project of synthetic files, with a
-# temporary vault. Your real vault and plugin data are not touched. Hard caps: 30 runs,
-# 180 s each, 30 minutes in total. It uses your Claude Code login and usage.
+# temporary vault. Your real vault, your Keychain and your plugin data are not touched: the
+# temporary vault keeps its key in a file. Hard caps: 30 runs, 180 s each, 30 minutes in
+# total. It uses your Claude Code login and usage.
+#
+# Optional: LIVE_KEYCHAIN=1 adds one case that stores the key of a second throwaway vault in
+# your real Keychain (one new entry, removed again at the end). This is the only way to see
+# the Keychain prompts and timing a real user gets. Run it from a terminal:
+#     LIVE_KEYCHAIN=1 tests/live/run-live.command
 #
 # Results are copied to <repo>/.live/results/ (results.md first; DONE or ABORTED is the
 # last file written). Needs: python3, Claude Code 2.1.295+, and uv or Python 3.10+ with

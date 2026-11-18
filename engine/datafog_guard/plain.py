@@ -64,9 +64,10 @@ SHELL_WORDS = KEYWORDS | BUILTINS
 # directory (cd and friends are handled separately, see name_problem). This is about reading the
 # command with certainty, NOT a claim that their arguments are inert: `test -v 'x[$(cmd)]'` and
 # `printf -v 'x[$(cmd)]'`, typed by the model, run cmd under bash, exactly as they would with a
-# plain `Bash` allow rule in Claude Code. Marker restoration has its own, far shorter list
-# (shellsub.RESTORE_PROGRAMS), and ccperms does not let a wildcard allow rule approve `test` with
-# -v or an arithmetic operator, or `printf -v`.
+# plain `Bash` allow rule in Claude Code. zsh also evaluates numeric printf operands and exit
+# arguments as arithmetic. Marker restoration has its own, far shorter list (shellsub.RESTORE_PROGRAMS).
+# ccperms requires exact allow rules for evaluating builtin forms, and a firm prompt while deny
+# or ask rules exist because execution inside those operands cannot be cleared by the grammar.
 PLAIN_BUILTINS = frozenset({"echo", "printf", "true", "false", ":", "pwd", "test", "kill", "wait", "type",
                             "which", "exit"})
 MOVES = frozenset({"cd", "chdir", "pushd", "popd"})

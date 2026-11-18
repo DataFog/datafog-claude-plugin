@@ -559,7 +559,9 @@ def status_line(session: Session, healthy: bool, problem: str = "") -> str:
     if not healthy:
         return f"DataFog guard: NOT PROTECTING ({problem}). Tool calls are blocked. " + DOCTOR_HINT
     bash = "filtered" if settings.bash_wrap == "runner" else "NOT FILTERED"
-    return (f"DataFog guard: on. Vault: {place}, not encrypted at rest. Bash output: {bash}. "
+    kept = ("encrypted, key in the system key store" if settings.vault_key == "keystore"
+            else "encrypted, key in a file beside it (weaker)")
+    return (f"DataFog guard: on. Vault: {place}, {kept}. Bash output: {bash}. "
             f"Markers in Bash commands: {settings.restore_in_bash}. "
             f"Detecting: {', '.join(settings.entities)}. Names and free-text addresses are not detected.")
 

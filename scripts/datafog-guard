@@ -20,6 +20,7 @@ done
 # A value that still looks like an unexpanded "${NAME}" placeholder counts as not set.
 case "${DATAFOG_DATA_DIR:-}" in '${'*) unset DATAFOG_DATA_DIR ;; esac
 case "${DATAFOG_VAULT_DIR:-}" in '${'*|'') unset DATAFOG_VAULT_DIR ;; esac
+case "${DATAFOG_VAULT_KEY:-}" in '${'*|'') unset DATAFOG_VAULT_KEY ;; esac
 case "${CLAUDE_PLUGIN_DATA:-}" in '${'*) unset CLAUDE_PLUGIN_DATA ;; esac
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
@@ -42,6 +43,10 @@ case "$1" in
     [ -x "$PY" ] || PY="$DATA/venv/Scripts/python.exe"
     if [ ! -x "$PY" ]; then
       cat >/dev/null
+      if UNSUPPORTED=$(sh "$ROOT/scripts/bootstrap.sh" --platform 2>/dev/null); then :; else
+        printf '{"systemMessage": "%s"}\n' "$UNSUPPORTED"
+        exit 0
+      fi
       MESSAGE="DataFog guard is NOT protecting this session: its Python environment could not be installed. Tool calls are blocked until it is. To fix it, run this in a terminal: sh '$ROOT/scripts/datafog-guard' --data-dir '$DATA' bootstrap   (details: $DATA/log/bootstrap.log)"
       printf '{"systemMessage": "%s"}\n' "$(printf '%s' "$MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g')"
       exit 0
@@ -59,6 +64,8 @@ if [ ! -x "$PY" ] && [ "$1" = "mcp" ]; then
 fi
 
 if [ ! -x "$PY" ]; then
+  # One message on a machine the plugin does not support; the call is blocked either way.
+  sh "$ROOT/scripts/bootstrap.sh" --platform >&2 || exit 2
   echo "DataFog guard is not installed yet, so this was blocked to keep data protected. Run: sh '$ROOT/scripts/datafog-guard' --data-dir '$DATA' bootstrap" >&2
   exit 2
 fi

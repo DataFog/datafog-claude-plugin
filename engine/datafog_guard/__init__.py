@@ -5,8 +5,11 @@ Values found in tool output are replaced by reversible markers such as
 to the real values locally when the agent writes.
 """
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.2.0"
 
-# The only runtime dependency. 1.5.0 has a known email-detection regression.
-CORE_REQUIREMENT = "datafog-core>=1.4.0,<1.5"
+# The detector. 1.5.0 and 1.6.0 have an email-detection regression (core #266); 1.7.0 fixed it.
+CORE_REQUIREMENT = "datafog-core>=1.7.0,<1.8"
+# The encrypted vault (datafog_fogvault.ApplicationVault). Released together with core; compiled
+# wheels exist for macOS arm64, Linux x86_64 (glibc 2.38+) and Windows x64 only.
+VAULT_REQUIREMENT = "datafog-fogvault>=1.7.0,<1.8"
 APP_ID = "claude-code"

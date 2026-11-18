@@ -1,49 +1,53 @@
-"""Detection, tokenization and restoration on top of datafog-core's Workspace.
+"""Detection, tokenization and restoration on top of datafog-core's encrypted application vault.
 
 Order of a tokenization, which must not change:
 
-    find values (detector + recall of values the vault already knows)
-    -> Workspace.prepare            assign markers, nothing is durable yet
-    -> store.compare_and_save       persist core's candidate bundle
-    -> Workspace.activate_saved     only now are the markers valid
-    -> check each marker restores to exactly its value
+    find values (detector + values the vault already knows)
+    -> known values take the marker they already have        nothing is written
+    -> new values: store.commit                              core assigns markers and saves them,
+                                                             encrypted and flushed, before it returns
+    -> check each new marker restores to exactly its value
+    -> note the new markers in the marker index
     -> release the tokenized text
 
 If any step fails, an exception is raised and no text is released.
 
-Facts about core 1.4 this module is built around (all checked against the real library):
+Facts about core 1.7 and its ApplicationVault this module is built around (all checked against
+the real libraries):
 
-* ``prepare`` and ``recall`` reject text holding marker-like strings the vault does not
-  know, so markers are obtained by preparing a small text made of the distinct values
-  only, and are spliced into the original text here.
-* ``prepare`` rejects partially overlapping findings, so overlaps are merged first.
-* Core folds case and trims white space when it compares values: ``Ada@Example.com`` and
-  ``ada@example.com`` share one marker, which restores to whichever was seen first.
-  A value whose marker would restore to different bytes is stored under a variant
-  label (``EMAIL_V2``) instead, so that restoration is always exact.
-* Limits: 1 MiB of text and 10,000 findings per call, 20,000 live entries, and ``recall``
-  stops working once the stored values pass roughly 256 KiB in total.
+* ``prepare_and_commit`` rejects text holding marker-like strings the vault does not know, so
+  markers are obtained by committing a small text made of the distinct new values only, and
+  are spliced into the original text here.
+* It rejects partially overlapping findings, so overlaps are merged first.
+* Core folds case and white space when it compares values: ``Ada@Example.com`` and
+  ``ada@example.com`` share one marker, which restores to whichever was seen first; ``a\tb``,
+  ``a\r\nb`` and ``a b`` likewise. A value whose marker would restore to different bytes is
+  stored under a variant label (``EMAIL_V2``) instead, so that restoration is always exact.
+  A value that is only white space is refused by core; spans are trimmed, so none is ever sent.
+* ApplicationVault has no ``recall`` and no lookup. Known values are matched here, against the
+  values of the markers in the store's marker index, with the rules core's recall had: the
+  whole value, ignoring case and the amount of white space, and not inside a longer word or
+  number.
+* Limits: 1 MiB of text and 10,000 findings per call, 20,000 live entries.
 """
 from __future__ import annotations
 
-import os
 import re
-import time
 from collections import Counter, namedtuple
 
-from .errors import EngineUnavailable, RecallUnavailable, TokenizeError, VaultBusy, VaultCorrupt, VaultError, VaultFull
-from .store import Head, VaultStore
+from .errors import EngineUnavailable, TokenizeError, VaultError
+from .store import MARKER_RE, EncryptedStore, StoreError
 
-MARKER_RE = re.compile(r"\[\[([A-Z][A-Z0-9_]*)_([0-9A-Z]{6})\]\]")
 ANY_CASE_MARKER_RE = re.compile(MARKER_RE.pattern, re.IGNORECASE)   # core restores markers in any case
 MAX_VALUE_BYTES = 32 * 1024          # larger findings are refused, which bounds every stored value
-RECALL_WINDOW = 512 * 1024
-RECALL_OVERLAP = 2 * MAX_VALUE_BYTES  # a stored value always fits whole inside one window
 VALUES_PER_COMMIT = 1000
 BYTES_PER_COMMIT = 256 * 1024
-SAVE_RETRIES = 60
 MAX_VARIANTS = 9
 ENTRY_LIMIT = 20_000
+# Known-value matching looks for every known value in the text. Past this many (values x text
+# characters) the values are first narrowed to those whose first characters occur in the text.
+PREFILTER_WORK = 50_000_000
+GRAM = 4
 
 
 # Characters a terminal does not show, or that move the cursor. A value split by one of them
@@ -234,141 +238,150 @@ def merge_spans(spans: list[Span], data: bytes) -> list[Span]:
     return merged
 
 
+class _Known:
+    """The values the vault holds, as this process last read them. Lives in memory only."""
+
+    __slots__ = ("stamp", "vault_id", "marker_of", "markers", "folded")
+
+    def __init__(self, stamp, vault_id, values: dict[str, str]):
+        self.stamp = stamp
+        self.vault_id = vault_id
+        self.markers = list(values)                    # every known marker
+        self.marker_of: dict[str, str] = {}            # exact value -> its first marker
+        self.folded: dict[str, list[str]] = {}         # value with case and white space folded -> values
+        for marker, value in values.items():
+            self.add(marker, value, count=False)
+
+    def add(self, marker: str, value: str, count: bool = True) -> None:
+        if count:
+            self.markers.append(marker)
+        if value not in self.marker_of:
+            self.marker_of[value] = marker
+            self.folded.setdefault(_fold(value), []).append(value)
+
+
+def _fold(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _is_word(char: str) -> bool:
+    return char == "_" or char.isalnum()
+
+
+def _value_pattern(value: str):
+    """A value as core's recall matched it: any white space between its parts, any case, and not
+    directly against a letter, digit or underscore where the value itself begins or ends with one."""
+    parts = value.split()
+    body = r"\s+".join(re.escape(part) for part in parts)
+    before = r"(?<!\w)" if re.match(r"\w", parts[0]) else ""
+    after = r"(?!\w)" if re.search(r"\w$", parts[-1]) else ""
+    return re.compile(before + body + after, re.IGNORECASE)
+
+
 class Vault:
     """One process's view of the vault. Safe to use from several threads of one process."""
 
-    def __init__(self, store: VaultStore, detector: Detector, recall_required: bool = True):
+    def __init__(self, store: EncryptedStore, detector: Detector):
         self.store = store
         self.detector = detector
-        self.recall_required = recall_required
-        self._workspace = None
-        self._head: Head | None = None
-        self._annotations: dict = {}
-        self._recall_ok: bool | None = None
+        self._known: _Known | None = None
         import threading
         self._mutex = threading.RLock()
 
     # -- loading -----------------------------------------------------------
-    @staticmethod
-    def _head_of(core_head) -> Head:
-        return Head(int(core_head.revision), bytes(core_head.commit_id).hex())
-
-    def _load(self, create: bool):
-        """Return a workspace at the stored head, reloading when another process moved it."""
-        core = _core()
-        stored = self.store.peek_head()
-        if self._workspace is not None and stored == self._head:
-            return self._workspace
-        self._workspace, self._head, self._recall_ok = None, None, None
-        snapshot = self.store.load()
-        if snapshot is None:
-            if not create:
-                return None
-            workspace = core.Workspace.create(os.urandom(16), os.urandom(16))
-            head = self._head_of(workspace.head())
-            self.store.compare_and_save(None, head, workspace.export_bundle(), {"entries": {}})
-            snapshot = self.store.load()   # ours, or the one a concurrent creator won with
-            if snapshot is None:
-                raise VaultError("the vault could not be created", "vault_create_failed")
-        try:
-            workspace = core.Workspace.open_bundle(snapshot.bundle)
-        except Exception as error:
-            raise VaultCorrupt("the vault snapshot cannot be opened") from error
-        if self._head_of(workspace.head()) != snapshot.head:
-            raise VaultCorrupt("the vault snapshot does not match its pointer")
-        self._workspace, self._head, self._annotations = workspace, snapshot.head, snapshot.annotations
-        return workspace
-
     def ensure_exists(self) -> None:
         with self._mutex:
-            self._load(create=True)
+            self.store.open(create=True)
 
     def health(self) -> dict:
-        """Open the vault, take and release its lock, and run the detector. Raises when unhealthy."""
+        """Run the detector's self-test and open the vault (creating it when there is none), which
+        checks its permissions, takes its lock, fetches its key and decrypts it. Raises when unhealthy."""
         with self._mutex:
             self.detector.self_test()
-            self._load(create=True)
-            lock = getattr(self.store, "lock", None)
-            if lock is not None:
-                with lock():
-                    pass
-            if self.recall_required:
-                self._check_recall(self._workspace)
-            return {"revision": self._head.revision if self._head else 0, "entries": self.entry_counts()}
+            self.store.open(create=True)
+            info = self.store.describe()
+            return {"revision": info.get("revision", 0), "protection": self.store.protection}
+
+    def _load_known(self) -> _Known | None:
+        """The known values, re-read when another process added to the vault. None without a vault."""
+        if self.store.open(create=False) is None:
+            self._known = None
+            return None
+        stamp, vault_id = self.store.index_stamp(), self.store.vault_id()
+        known = self._known
+        if known is not None and known.stamp == stamp and known.vault_id == vault_id:
+            return known
+        try:
+            values = self.store.values_for(self.store.read_index())
+        except StoreError as error:
+            raise VaultError("the vault could not be read", "vault_" + error.code) from None
+        if self.store.vault_id() != vault_id:          # the vault was replaced while it was read
+            values = self.store.values_for(self.store.read_index())
+            vault_id = self.store.vault_id()
+        self._known = _Known(stamp, vault_id, values)
+        return self._known
 
     def entry_counts(self) -> dict:
+        """Values held, by marker label. Counts what the vault confirms, not what the index claims."""
         with self._mutex:
-            if self._workspace is None:
-                self._load(create=False)
-            entries = self._annotations.get("entries") if isinstance(self._annotations, dict) else None
-            return dict(entries) if isinstance(entries, dict) else {}
+            known = self._load_known()
+            return dict(Counter(marker_label(marker) for marker in known.markers)) if known else {}
 
     # -- finding values ----------------------------------------------------
-    def _check_recall(self, workspace) -> bool:
-        if self._recall_ok is None:
-            try:
-                workspace.recall("probe")
-                self._recall_ok = True
-            except Exception:
-                self._recall_ok = False
-        if not self._recall_ok and self.recall_required:
-            raise RecallUnavailable(
-                "the vault holds too many values for known-value matching to work; "
-                "run /datafog:purge, or set recall_required to false to rely on the detector alone")
-        return self._recall_ok
-
-    def _marker_issues(self, workspace, text: str) -> list[tuple[int, int]]:
-        """Byte ranges of marker-like strings the vault does not accept (they break recall)."""
-        if "[[" not in text and "_" not in text:
-            return []
-        report = workspace.restore_report(text)
-        return sorted((issue["byteRange"]["start"], issue["byteRange"]["end"]) for issue in report["issues"])
-
-    def _recall_window(self, workspace, data: bytes, offset: int, out: list[Span]) -> None:
-        core = _core()
-        try:
-            findings = workspace.recall(data.decode("utf-8"))["findings"]
-        except core.DataFogWorkspaceError as error:
-            if error.code != "resource_limit":
-                raise TokenizeError("known-value matching failed", "recall_failed") from error
-            if not self._check_recall(workspace):
-                return
-            if len(data) <= 4096:
-                raise TokenizeError("the text holds too many values to process", "too_many_values") from error
-            self._recall_range(workspace, data, offset, out, window=max(4096, len(data) // 2))
+    def _known_spans(self, known: _Known, text: str, out: list[Span]) -> None:
+        """Byte spans of known values in ``text``. Text that is itself a marker is never matched."""
+        if not known.folded:
             return
-        for item in findings:
-            start, end = item["byteRange"]["start"], item["byteRange"]["end"]
-            if item["finding"]["matchedText"] in self.detector.allowlist:
+        folded_text = _fold(text)
+        candidates = known.folded
+        if len(candidates) * len(folded_text) > PREFILTER_WORK:
+            grams = {folded_text[index:index + GRAM] for index in range(len(folded_text) - GRAM + 1)}
+            candidates = {key: values for key, values in candidates.items() if len(key) < GRAM or key[:GRAM] in grams}
+        hits = [key for key in candidates if key in folded_text]
+        if not hits:
+            return
+        markers = [(match.start(), match.end()) for match in ANY_CASE_MARKER_RE.finditer(text)]
+        ascii_only = text.isascii()
+        for key in hits:
+            values = known.folded[key]
+            entity = marker_label(known.marker_of[values[0]])
+            if any(value in self.detector.allowlist for value in values):
                 continue
-            out.append(Span(offset + start, offset + end, item["finding"]["entityType"], True))
+            for start, end in self._occurrences(values[0], key, text, folded_text):
+                if any(left < end and start < right for left, right in markers):
+                    continue
+                if not ascii_only:
+                    size = len(text[start:end].encode("utf-8", "surrogatepass"))
+                    start = len(text[:start].encode("utf-8", "surrogatepass"))
+                    end = start + size
+                out.append(Span(start, end, entity, True))
 
-    def _recall_range(self, workspace, data: bytes, offset: int, out: list[Span], window: int) -> None:
-        if len(data) <= window:
-            self._recall_window(workspace, data, offset, out)
-            return
-        overlap = min(RECALL_OVERLAP, window // 2)
-        position = 0
-        while position < len(data):
-            end = min(len(data), position + window)
-            while end < len(data) and (data[end] & 0xC0) == 0x80:
-                end += 1
-            self._recall_window(workspace, data[position:end], offset + position, out)
-            if end >= len(data):
-                break
-            position = end - overlap
-            while (data[position] & 0xC0) == 0x80:
-                position -= 1
+    @staticmethod
+    def _occurrences(value: str, key: str, text: str, folded_text: str):
+        """Character ranges where ``value`` stands in ``text`` (see :func:`_value_pattern`).
 
-    def _raw_spans(self, workspace, text: str, data: bytes) -> list[Span]:
-        """Detector findings plus recall hits for one text, as byte spans into that text."""
+        The usual case, every occurrence spelled exactly as stored, is a plain search; a regular
+        expression is only built when case or white space differ somewhere."""
+        if text.count(value) != folded_text.count(key):
+            return [match.span() for match in _value_pattern(value).finditer(text)]
+        found = []
+        size, edge_left, edge_right = len(value), _is_word(value[0]), _is_word(value[-1])
+        position = text.find(value)
+        while position >= 0:
+            end = position + size
+            if not (edge_left and position and _is_word(text[position - 1])) and \
+                    not (edge_right and end < len(text) and _is_word(text[end])):
+                found.append((position, end))
+                position = text.find(value, end)
+            else:
+                position = text.find(value, position + 1)
+        return found
+
+    def _raw_spans(self, known: _Known | None, text: str) -> list[Span]:
+        """Detector findings plus known values for one text, as byte spans into that text."""
         spans = self.detector.spans(text)
-        if workspace is not None and self._check_recall(workspace):
-            position = 0
-            for start, end in self._marker_issues(workspace, text) + [(len(data), len(data))]:
-                if start > position:
-                    self._recall_range(workspace, data[position:start], position, spans, RECALL_WINDOW)
-                position = max(position, end)
+        if known is not None:
+            self._known_spans(known, text, spans)
         return spans
 
     def find_spans(self, text: str, data: bytes | None = None) -> list[Span]:
@@ -384,8 +397,8 @@ class Vault:
                     data = text.encode("utf-8")
                 except UnicodeError as error:
                     raise TokenizeError("the text is not valid Unicode", "undecodable_text") from error
-            workspace = self._load(create=False)
-            spans = self._raw_spans(workspace, text, data)
+            known = self._load_known()
+            spans = self._raw_spans(known, text)
             if _NEEDS_VIEWS.search(text):
                 from bisect import bisect_left, bisect_right
                 seen = {text}
@@ -400,7 +413,7 @@ class Vault:
                         starts.append(total)
                         code = ord(char)
                         total += 1 if code < 0x80 else 2 if code < 0x800 else 3 if code < 0x10000 else 4
-                    for span in self._raw_spans(workspace, view, view.encode("utf-8")):
+                    for span in self._raw_spans(known, view):
                         first = bisect_right(starts, span.start) - 1
                         last = bisect_left(starts, span.end) - 1
                         cells = origin[first:last + 1]
@@ -423,78 +436,37 @@ class Vault:
 
     # -- assigning markers ---------------------------------------------------
     def _commit(self, pairs: list[tuple[str, str]]) -> dict[str, str]:
-        """prepare -> save -> activate for (entity, value) pairs. Returns value -> marker."""
-        core = _core()
-        text = "\n".join(value for _, value in pairs)
-        last_error: Exception | None = None
-        for attempt in range(SAVE_RETRIES):
-            if attempt:
-                self._workspace = None
-                import random
-                time.sleep(min(0.2, 0.002 * (2 ** min(attempt, 6))) * random.random())
-            workspace = self._load(create=True)
-            findings, offset = [], 0
-            for entity, value in pairs:
-                size = len(value.encode("utf-8"))
-                findings.append(core.WorkspaceFinding(entity, value, core.TextRange(offset, offset + size),
-                                                      source="scanner", needs_review=False))
-                offset += size + 1
-            try:
-                change = workspace.prepare(text, findings, os.urandom(16))
-            except core.DataFogWorkspaceError as error:
-                if error.code == "resource_limit":
-                    raise VaultFull(
-                        f"the vault is full (core allows {ENTRY_LIMIT:,} live entries); new values cannot be "
-                        "protected until it is emptied with /datafog:purge") from error
-                raise TokenizeError("the vault refused the values", "prepare_" + str(error.code)) from error
-            try:
-                preview = change.preview()
-                output = preview["text"].encode("utf-8")
-                transformations = sorted(preview["transformations"], key=lambda t: t["sourceByteRange"]["start"])
-                if len(transformations) != len(pairs):
-                    raise TokenizeError("the vault did not assign a marker to every value", "prepare_incomplete")
-                markers: dict[str, str] = {}
-                for (_, value), item in zip(pairs, transformations):
-                    marker = output[item["outputByteRange"]["start"]:item["outputByteRange"]["end"]].decode("utf-8")
-                    if not MARKER_RE.fullmatch(marker):
-                        raise TokenizeError("the vault returned an unexpected marker", "prepare_bad_marker")
-                    markers[value] = marker
-                expected, candidate = change.expected_head(), change.candidate_head()
-                if expected != candidate:
-                    # Markers the workspace cannot restore yet are the new entries: count them by type.
-                    entries = Counter(self.entry_counts())
-                    distinct = sorted(set(markers.values()))
-                    joined = "\n".join(distinct).encode("utf-8")
-                    for issue in workspace.restore_report(joined.decode("utf-8"))["issues"]:
-                        marker = joined[issue["byteRange"]["start"]:issue["byteRange"]["end"]].decode("utf-8")
-                        entries[marker_label(marker)] += 1
-                    saved = self.store.compare_and_save(self._head_of(expected), self._head_of(candidate),
-                                                        change.export_candidate_bundle(), {"entries": dict(entries)})
-                    if not saved:
-                        change.discard()
-                        last_error = VaultBusy("the vault changed while it was being updated")
-                        continue
-                    self._annotations = {"entries": dict(entries)}
-                workspace.activate_saved(change, expected, candidate)
-                self._head = self._head_of(candidate)
-                self._recall_ok = None
-                return markers
-            except BaseException:
-                try:
-                    change.discard()
-                except Exception:
-                    pass
-                raise
-        raise last_error or VaultBusy("the vault changed while it was being updated")
+        """Store (entity, value) pairs in the vault. Returns value -> marker.
+
+        Core gives a value it already holds (compared loosely) the marker it has; the caller
+        checks exactness. The markers are durable when this returns.
+        """
+        try:
+            markers = self.store.commit(pairs)
+        except StoreError as error:
+            raise TokenizeError("the vault refused the values", "prepare_" + error.code) from None
+        return {value: marker for (_, value), marker in zip(pairs, markers)}
 
     def _markers_for(self, wanted: dict[str, list[str]]) -> dict[str, str]:
         """value -> marker, for values with their candidate entity types (most trusted first)."""
+        known = self._load_known()
         markers: dict[str, str] = {}
-        attempt = {value: 0 for value in wanted}
-        pending = list(wanted)
+        pending = []
+        for value in wanted:
+            if not value.strip():
+                raise TokenizeError("a value of only white space cannot be stored", "empty_value")
+            marker = known.marker_of.get(value) if known is not None else None
+            if marker is not None:
+                markers[value] = marker        # byte-exact: it was read back from the vault
+            else:
+                pending.append(value)
+        if not pending:
+            return markers
+        attempt = {value: 0 for value in pending}
+        fresh: dict[str, str] = {}             # marker -> value, to note in the index
         for _ in range(MAX_VARIANTS + 8):
             if not pending:
-                return markers
+                break
             pairs = []
             for value in pending:
                 candidates, index = wanted[value], attempt[value]
@@ -518,22 +490,37 @@ class Vault:
                     batch.append(pair)
                     size += len(pair[1].encode("utf-8")) + 1
             # Exactness check: core compares values loosely, a write-back must be byte-exact.
-            separator = f"\n<{os.urandom(8).hex()}>\n"
-            workspace = self._load(create=False)
-            if workspace is None:
-                raise VaultError("the vault disappeared while it was being updated", "vault_missing")
-            restored = workspace.restore(separator.join(assigned[value] for value in pending)).split(separator)
-            if len(restored) != len(pending):
-                raise TokenizeError("the vault did not restore the values it was given", "restore_check_failed")
+            try:
+                restored = self.store.values_for([assigned[value] for value in pending])
+            except StoreError as error:
+                raise TokenizeError("the vault did not restore the values it was given",
+                                    "restore_check_" + error.code) from None
             still = []
-            for value, back in zip(pending, restored):
-                if back == value:
-                    markers[value] = assigned[value]
+            for value in pending:
+                marker = assigned[value]
+                if marker not in restored:
+                    raise TokenizeError("the vault did not restore the values it was given", "restore_check_failed")
+                if restored[marker] == value:
+                    markers[value] = marker
+                    fresh[marker] = value
                 else:
                     attempt[value] += 1
                     still.append(value)
             pending = still
-        raise TokenizeError("a value cannot be stored so that it restores exactly", "no_exact_marker")
+        if pending:
+            raise TokenizeError("a value cannot be stored so that it restores exactly", "no_exact_marker")
+        if known is None or known.vault_id != self.store.vault_id():
+            self._known = None                 # the vault was created or replaced just now: read it afresh
+            known = self._load_known()
+        have = set(known.markers) if known is not None else set()
+        missing = [marker for marker in fresh if marker not in have]
+        before, after = self.store.add_to_index(missing)
+        if known is not None:
+            for marker in missing:
+                known.add(marker, fresh[marker])
+            # Ours was the only change since the index was read: keep what is in memory.
+            known.stamp = after if before == known.stamp else None
+        return markers
 
     def tokenize_many(self, texts: list[str]) -> tuple[list[str], Counter]:
         """Replace every value in each text by its marker. Returns the texts and counts by entity type."""
@@ -614,16 +601,17 @@ class Vault:
             if "[[" not in text:
                 # Bare codes without brackets are never restored, so there is nothing to do.
                 return RestoreResult(text, Counter(), 0)
-            workspace = self._load(create=False)
-            if workspace is None:
-                return RestoreResult(text, Counter(), len(ANY_CASE_MARKER_RE.findall(text)))
             try:
-                return self._restore(workspace, text, depth=0)
+                return self._restore(text, depth=0)
+            except StoreError as error:
+                if error.code == "no_vault":
+                    return RestoreResult(text, Counter(), len(ANY_CASE_MARKER_RE.findall(text)))
+                raise VaultError("the vault could not restore the text", "restore_" + error.code) from None
             except UnicodeError as error:
                 raise TokenizeError("the text is not valid Unicode", "undecodable_text") from error
 
-    def _restore(self, workspace, text: str, depth: int) -> RestoreResult:
-        report = workspace.restore_report(text)
+    def _restore(self, text: str, depth: int) -> RestoreResult:
+        report = self.store.restore_report(text)
         issues = sorted((issue["byteRange"]["start"], issue["byteRange"]["end"]) for issue in report["issues"])
         data = text.encode("utf-8")
         skip = bytearray(len(data) + 1)
@@ -644,7 +632,7 @@ class Vault:
         total: Counter = Counter()
         for start, end in issues + [(len(data), len(data))]:
             if start > position:
-                piece = self._restore(workspace, data[position:start].decode("utf-8"), depth + 1)
+                piece = self._restore(data[position:start].decode("utf-8"), depth + 1)
                 parts.append(piece.text)
                 total.update(piece.restored)
                 unknown += piece.unknown
@@ -662,20 +650,21 @@ class Vault:
             if "[[" not in text:
                 return [], 0
             matches = list(ANY_CASE_MARKER_RE.finditer(text))
-            workspace = self._load(create=False)
-            if workspace is None:
-                return [], len(matches)
             try:
-                unknown = self._restore(workspace, text, depth=0).unknown
-                spans = []
-                for match in matches:
-                    report = workspace.restore_report(match.group(0))
-                    if report["issues"] or report["text"] is None:
-                        continue
-                    spans.append((match.start(), match.end(), base_entity(match.group(1).upper()), report["text"]))
-                return spans, unknown
+                # One call to core for all markers (each call re-reads and decrypts the vault).
+                values = self.store.values_for([match.group(0) for match in matches])
+                unknown = sum(1 for match in matches if match.group(0) not in values)
+                if len(values) < len({match.group(0) for match in matches}) or not matches:
+                    unknown = self._restore(text, depth=0).unknown     # the exact count core would report
+            except StoreError as error:
+                if error.code == "no_vault":
+                    return [], len(matches)
+                raise VaultError("the vault could not restore the text", "restore_" + error.code) from None
             except UnicodeError as error:
                 raise TokenizeError("the text is not valid Unicode", "undecodable_text") from error
+            spans = [(match.start(), match.end(), base_entity(match.group(1).upper()), values[match.group(0)])
+                     for match in matches if match.group(0) in values]
+            return spans, unknown
 
     def marker_counts(self, text: str) -> tuple[Counter, int]:
         """(known markers by type, unknown marker-like strings) in ``text``; changes nothing."""

@@ -19,14 +19,26 @@ def _problem(error: BaseException) -> str:
     return f"{error.code}: {error.user_message}" if isinstance(error, GuardError) else safe_code(error)
 
 
+PROTECTION_TEXT = {
+    "credential_store": "encrypted; the key is in the operating system's key store (macOS Keychain, or the "
+                        "Secret Service on Linux)",
+    "file_key": "encrypted, but the key is a file beside the data (vault_key: file): anyone who can read the "
+                "vault directory can read the vault",
+}
+LEGACY_TEXT = ("an UNENCRYPTED vault from a development build is still in the vault directory. This version "
+               "cannot read it; delete it with /datafog:purge")
+
+
 def status_report(for_model: bool = False) -> str:
     settings = config.load()
     lines = [f"DataFog guard {__version__}"]
+    protection = None
     try:
         from .engine import open_vault
         vault, _ = open_vault(settings)
         health = vault.health()
         entries = vault.entry_counts()
+        protection = health["protection"]
         lines.append("Protection: ON")
         lines.append(f"Values held in the vault: {sum(entries.values())} ({describe_counts(entries)})")
         lines.append(f"Vault revision: {health['revision']}")
@@ -37,7 +49,11 @@ def status_report(for_model: bool = False) -> str:
     lines.append(f"Vault location: {place}")
     if not for_model:
         lines.append(f"Vault path: {settings.vault_dir}")
-    lines.append("Vault encryption at rest: NONE in this version (owner-only file permissions)")
+    lines.append("Vault encryption at rest: " + (PROTECTION_TEXT.get(protection, str(protection)) if protection
+                                                 else "the vault could not be opened"))
+    from .store import legacy_plain_store, vault_path
+    if legacy_plain_store(vault_path(settings.vault_dir)):
+        lines.append("WARNING: " + LEGACY_TEXT)
     lines.append(f"Detected types: {', '.join(settings.entities)}")
     lines.append("Not detected: names of people, addresses without a label, anything in images or PDFs")
     lines.append(f"Allowlisted exact values: {len(settings.allowlist)}")
@@ -60,13 +76,18 @@ def status_report(for_model: bool = False) -> str:
 
 def purge(argv: list[str]) -> int:
     settings = config.load()
-    from .store import FileVaultStore
-    store = FileVaultStore(settings.vault_dir)
+    from .engine import open_store
+    from .store import KEYSTORE_SERVICE
+    store = open_store(settings)
     info = store.describe()
     if "--confirm" not in argv:
         print("This deletes the DataFog vault at:")
         print(f"  {settings.vault_dir}")
         print(f"Current state: {info.get('state')}, revision {info.get('revision', 0)}.")
+        if info.get("protection") == "credential_store":
+            print("Its key is removed from the operating system's key store as well.")
+        if info.get("legacy_plain_store"):
+            print("The unencrypted vault of a development build in the same directory is deleted too.")
         print("After that, every marker issued so far is meaningless: text that still holds markers")
         print("(files Claude wrote with markers, old transcripts, notes) can NEVER be turned back into")
         print("the real values. Files on disk that already hold real values are not affected.")
@@ -77,14 +98,28 @@ def purge(argv: list[str]) -> int:
         print(f"Not confirmed; nothing was deleted. The confirmation word is {PURGE_WORD}.")
         return 1
     try:
-        existed = store.purge()
-        shutil.rmtree(settings.shadow_dir, ignore_errors=True)
+        result = store.purge()
+        if os.path.islink(settings.shadow_dir):
+            os.unlink(settings.shadow_dir)
+        else:
+            try:
+                shutil.rmtree(settings.shadow_dir)
+            except FileNotFoundError:
+                pass
     except Exception as error:
         print(f"The vault could not be deleted ({_problem(error)}).")
         return 1
-    print("The vault was deleted." if existed else "There was no vault to delete.")
+    print("The vault was deleted." if result["existed"] or result["legacy"] else "There was no vault to delete.")
+    if result["legacy"]:
+        print("The unencrypted vault of a development build was deleted.")
+    if result["keystore"] == "removed":
+        print("Its key was removed from the operating system's key store.")
+    elif result["keystore"] == "left":
+        print("Its key could not be removed from the operating system's key store. It opens nothing now that the")
+        print(f"vault file is gone. To remove it by hand, delete the entry with service \"{KEYSTORE_SERVICE}\"")
+        print(f"and account \"{result['account']}\" (macOS: Keychain Access; Linux: Seahorse or secret-tool).")
     print("Markers issued before now can no longer be restored. A new, empty vault is created on next use.")
-    return 0
+    return 1 if result["keystore"] == "left" else 0
 
 
 def _claude_version() -> tuple[int, ...] | None:
@@ -112,6 +147,11 @@ def doctor() -> int:
 
     print(f"DataFog guard {__version__} doctor")
     check("Python 3.10 or later", sys.version_info >= (3, 10), sys.version.split()[0])
+    from . import VAULT_REQUIREMENT
+    from .support import UNSUPPORTED, platform_problem
+    problem = platform_problem()
+    check("supported machine (macOS on Apple Silicon, or Linux x86_64 with glibc 2.38 or later)", not problem,
+          f"{problem}. {UNSUPPORTED}" if problem else "")
     try:
         started = time.perf_counter()
         from importlib.metadata import version
@@ -123,22 +163,46 @@ def doctor() -> int:
         check("configured entity types are supported", not missing, ", ".join(missing))
     except Exception as error:
         check("detector library", False, safe_code(error) + "; run the bootstrap command shown at session start")
+    try:
+        started = time.perf_counter()
+        from importlib.metadata import version
+
+        import datafog_fogvault  # noqa: F401
+        check(f"vault library ({VAULT_REQUIREMENT})", True, f"datafog-fogvault {version('datafog-fogvault')}, "
+              f"import {1000 * (time.perf_counter() - started):.1f} ms")
+    except Exception as error:
+        check("vault library", False, safe_code(error) + ("" if problem else
+                                                          "; run the bootstrap command shown at session start"))
     check("configuration files", not settings.problems, "; ".join(settings.problems))
+    from .store import legacy_plain_store, vault_path
+    protection = None
     try:
         from .engine import open_vault
         vault, _ = open_vault(settings)
         started = time.perf_counter()
-        vault.health()
-        check("vault opens, lock works, detector finds a test value", True,
+        protection = vault.health()["protection"]
+        check("vault opens (private files, lock, key, decryption) and the detector finds a test value", True,
               f"{1000 * (time.perf_counter() - started):.1f} ms")
         text, counts = vault.tokenize("doctor probe.synthetic@example.com")
         check("tokenize and restore round trip", vault.restore(text).text == "doctor probe.synthetic@example.com")
     except Exception as error:
         check("vault and detector", False, _problem(error))
-    if os.name != "nt" and os.path.isdir(settings.vault_dir):
-        mode = os.stat(settings.vault_dir).st_mode & 0o777
+    directory = vault_path(settings.vault_dir)
+    if os.name != "nt" and os.path.isdir(directory):
+        mode = os.stat(directory).st_mode & 0o777
         check("vault directory is owner-only", mode == 0o700, oct(mode))
-    check("vault encryption at rest", None, "none in this version")
+        loose = sorted(name for name in os.listdir(directory)
+                       if os.path.isfile(os.path.join(directory, name))
+                       and os.stat(os.path.join(directory, name)).st_mode & 0o077)
+        check("vault files are owner-only", not loose, ", ".join(loose))
+    if protection == "credential_store":
+        check("vault encryption at rest", True, PROTECTION_TEXT[protection])
+    elif protection == "file_key":
+        check("vault encryption at rest", None, PROTECTION_TEXT[protection])
+    else:
+        check("vault encryption at rest", False, "the vault could not be opened, so nothing can be said")
+    if legacy_plain_store(directory):
+        check("no unencrypted vault left over", False, LEGACY_TEXT)
     check("vault location", None, f"{settings.vault_location}: {settings.vault_dir}")
     for name in ("launcher", "wrap_script"):
         check(f"plugin file {os.path.basename(getattr(settings, name))}", os.path.exists(getattr(settings, name)))

@@ -32,6 +32,14 @@ NOTES = (
 )
 
 
+def open_test_vault(directory, entities=None, allowlist=frozenset()):
+    """A Vault on a throwaway directory, with the key in a file there (never the OS key store)."""
+    from datafog_guard.config import DEFAULT_ENTITIES
+    from datafog_guard.store import EncryptedStore
+    from datafog_guard.vault import Detector, Vault
+    return Vault(EncryptedStore(str(directory), key_mode="file"), Detector(entities or DEFAULT_ENTITIES, allowlist))
+
+
 def assert_no_sentinel(text: str, where: str = "") -> None:
     for value in SENTINELS:
         assert value not in text, f"real value leaked {where}"
@@ -50,6 +58,10 @@ class Sandbox:
         self.project.mkdir()
         self.home.mkdir()
         self.extra_env: dict[str, str] = {}
+        # The vault key of every test vault is a file in the throwaway vault directory, never the
+        # operating system's key store. Set the way a user would: in the plugin's config file,
+        # which the hooks, the Bash runner and the MCP server all read (env() sets it as well).
+        (self.data / "config.json").write_text(json.dumps({"vault_key": "file"}), encoding="utf-8")
 
     def env(self, **extra) -> dict:
         env = {key: value for key, value in os.environ.items()
@@ -57,6 +69,9 @@ class Sandbox:
         env.update({
             "PYTHONPATH": str(ENGINE), "PYTHONDONTWRITEBYTECODE": "1",
             "DATAFOG_DATA_DIR": str(self.data), "DATAFOG_VAULT_DIR": str(self.vault),
+            # Tests never touch the operating system's key store: the vault key is a file in the
+            # throwaway vault directory. test_keystore.py covers what happens without this.
+            "DATAFOG_VAULT_KEY": "file",
             "CLAUDE_PLUGIN_ROOT": str(ROOT), "CLAUDE_PROJECT_DIR": str(self.project),
             # The hook reads the user's Claude Code settings (~/.claude/settings.json, ~/.claude.json):
             # tests must never see the real ones.
@@ -103,7 +118,7 @@ class Sandbox:
 
     def seed(self, value: str, entity: str = "ACCOUNT_NUMBER") -> str:
         """Store one value in the vault as it is and return its marker."""
-        return self.open_vault()._commit([(entity, value)])[value]
+        return seed_values(self.open_vault(), [(entity, value)])[value]
 
     def post(self, tool: str, tool_input: dict, tool_response, **env_extra):
         return self.hook({"hook_event_name": "PostToolUse", "tool_name": tool, "tool_input": tool_input,
@@ -113,11 +128,8 @@ class Sandbox:
         return self.hook({"hook_event_name": "UserPromptSubmit", "prompt": text, "cwd": str(self.project)},
                          **env_extra)
 
-    def open_vault(self):
-        from datafog_guard.config import DEFAULT_ENTITIES
-        from datafog_guard.store import FileVaultStore
-        from datafog_guard.vault import Detector, Vault
-        return Vault(FileVaultStore(str(self.vault)), Detector(DEFAULT_ENTITIES))
+    def open_vault(self, entities=None, allowlist=frozenset()):
+        return open_test_vault(self.vault, entities, allowlist)
 
     def write(self, name: str, content: str | bytes) -> Path:
         path = self.project / name
@@ -153,8 +165,10 @@ def standin_plugin(box: "Sandbox"):
             "  *) break ;; esac; done\n"
             f'exec "{sys.executable}" -I "{ENGINE}/run.py" "$@"\n')
         launcher.chmod(0o755)
-    saved = {name: os.environ.get(name) for name in ("DATAFOG_DATA_DIR", "DATAFOG_VAULT_DIR", "CLAUDE_PLUGIN_ROOT")}
-    os.environ.update(DATAFOG_DATA_DIR=str(box.data), DATAFOG_VAULT_DIR=str(box.vault), CLAUDE_PLUGIN_ROOT=str(plugin))
+    names = ("DATAFOG_DATA_DIR", "DATAFOG_VAULT_DIR", "DATAFOG_VAULT_KEY", "CLAUDE_PLUGIN_ROOT")
+    saved = {name: os.environ.get(name) for name in names}
+    os.environ.update(DATAFOG_DATA_DIR=str(box.data), DATAFOG_VAULT_DIR=str(box.vault), DATAFOG_VAULT_KEY="file",
+                      CLAUDE_PLUGIN_ROOT=str(plugin))
     try:
         settings = config.load()
     finally:
@@ -174,14 +188,27 @@ def box(tmp_path) -> Sandbox:
 @pytest.fixture(scope="session")
 def full_vault_dir(tmp_path_factory) -> Path:
     """A vault filled to core's limit of 20,000 live entries (built once)."""
-    from datafog_guard.config import DEFAULT_ENTITIES
-    from datafog_guard.store import FileVaultStore
-    from datafog_guard.vault import Detector, Vault
     directory = tmp_path_factory.mktemp("fullvault") / "vault"
-    vault = Vault(FileVaultStore(str(directory)), Detector(DEFAULT_ENTITIES), recall_required=False)
+    vault = open_test_vault(directory)
     for start in range(0, 20_000, 1000):
-        vault._commit([("ACCOUNT_NUMBER", f"v{number:07d}") for number in range(start, start + 1000)])
+        seed_values(vault, [("ACCOUNT_NUMBER", f"v{number:07d}") for number in range(start, start + 1000)])
     return directory
+
+
+def seed_values(vault, pairs) -> dict:
+    """Store (entity, value) pairs as they are, as a tokenization would. Returns value -> marker."""
+    markers = vault._commit(pairs)
+    vault.store.add_to_index(list(markers.values()))
+    return markers
+
+
+def corrupt_vault(directory, content: bytes = b"corrupt") -> None:
+    """Replace the encrypted vault file by something that is not one."""
+    directory = Path(directory)
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / "workspace.enc"
+    path.write_bytes(content)
+    os.chmod(path, 0o600)
 
 
 def copy_vault(source: Path, target: Path) -> None:

@@ -47,8 +47,9 @@ class VaultFull(VaultError):
     code = "vault_full"
 
 
-class RecallUnavailable(VaultError):
-    code = "recall_unavailable"
+class KeyStoreUnavailable(VaultError):
+    """The operating system's key store is locked, missing or refused access."""
+    code = "keystore_unavailable"
 
 
 class TokenizeError(GuardError):

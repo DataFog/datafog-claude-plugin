@@ -5,6 +5,7 @@ hooks.json, the launcher and the engine together. It says nothing about real Cla
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -57,6 +58,17 @@ def test_aborts_on_an_old_claude(tmp_path):
         result, last = drive(work, claude=old)
         assert last.startswith("LIVE ABORTED") and "2.1.295" in last
         assert open(os.path.join(work, "log", "status.txt")).read().startswith("ABORTED")
+
+
+@pytest.mark.parametrize("flags", [None, []])
+def test_driver_isolates_fixture_settings_even_without_optional_flags(tmp_path, flags):
+    spec = importlib.util.spec_from_file_location("datafog_live_driver", DRIVER)
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    driver = live.Driver(str(tmp_path), str(FAKE))
+    run = driver.run("probe-settings", "Reply with exactly: LIVE_OK", env={"SIM_NO_HOOKS": "1"}, flags=flags)
+    assert run.exit_code == 0 and run.final == "LIVE_OK"
+    assert run.init["plugins"] == [{"name": "datafog", "path": str(ROOT)}]
 
 
 @needs_network

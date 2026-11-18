@@ -64,7 +64,7 @@ class Server:
     def session(self):
         from .engine import open_vault
         settings = config.load()
-        key = (settings.vault_dir, settings.entities, settings.allowlist, settings.recall_required)
+        key = (settings.vault_dir, settings.entities, settings.allowlist, settings.vault_key)
         if self._vault is None or key != self._vault_key:
             self._vault, _ = open_vault(settings)
             self._vault_key = key

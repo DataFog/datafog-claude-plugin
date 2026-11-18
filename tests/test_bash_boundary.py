@@ -16,7 +16,7 @@ import sys
 import time
 
 import pytest
-from conftest import EMAIL, ENGINE, NOTES, ROOT, SSN, assert_no_sentinel
+from conftest import EMAIL, ENGINE, NOTES, ROOT, SSN, assert_no_sentinel, corrupt_vault
 
 SHELLS = [shell for shell in ("bash", "zsh") if shutil.which(shell)]
 LINUX_PROC = os.path.isdir("/proc/self/fd")
@@ -185,7 +185,9 @@ def run_as_unprivileged_user(box, command: str) -> str:
     path = box.tmp
     while path.parent != path:
         try:
-            os.chmod(path, os.stat(path).st_mode | 0o011)
+            # Search AND read: core's ApplicationVault opens every directory above the vault to flush
+            # it, and fails where the user may not list one (test_store.py pins that limit).
+            os.chmod(path, os.stat(path).st_mode | 0o055)
         except OSError:
             pass
         path = path.parent
@@ -307,7 +309,7 @@ def test_variables_and_functions_do_not_persist(hooked):
 
 def test_command_does_not_run_unless_the_filter_is_healthy(hooked):
     command = hooked.command(f"touch {hooked.box.tmp}/ran; echo {EMAIL}")
-    (hooked.box.vault / "HEAD").write_text("corrupt")
+    corrupt_vault(hooked.box.vault)
     result = subprocess.run([hooked.shell, "-c", command], capture_output=True, cwd=hooked.box.project,
                             env={"PATH": os.environ["PATH"], "HOME": str(hooked.box.tmp)})
     assert result.returncode == 125 and not (hooked.box.tmp / "ran").exists()

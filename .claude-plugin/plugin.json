@@ -1,8 +1,8 @@
 {
   "name": "datafog",
   "displayName": "DataFog",
-  "description": "Keeps emails, phone numbers, card and ID numbers, API keys and other credentials out of the model's context: values in files, command output and tool results are replaced by reversible markers before Claude sees them, and swapped back locally when Claude writes. Development build; see the README for what is and is not covered.",
-  "version": "0.2.0-dev",
+  "description": "Keeps emails, phone numbers, card and ID numbers, API keys and other credentials out of the model's context: values in files, command output and tool results are replaced by reversible markers before Claude sees them, and swapped back locally when Claude writes. See the README for coverage and platform limits.",
+  "version": "0.2.0",
   "author": {
     "name": "DataFog",
     "url": "https://datafog.ai"
@@ -15,7 +15,7 @@
     "keep_vault_on_uninstall": {
       "type": "boolean",
       "title": "Keep the vault when the plugin is uninstalled",
-      "description": "On: the vault (the table that turns markers back into your real values) is stored in your user data folder and survives an uninstall. Off: it is stored in the plugin's data folder, which Claude Code deletes on uninstall; markers left in your files can then never be restored.",
+      "description": "On: the encrypted vault (the table that turns markers back into your real values) is stored in your user data folder and survives an uninstall, and its key stays in your key store. Off: it is stored in the plugin's data folder, which Claude Code deletes on uninstall; markers left in your files can then never be restored.",
       "default": true
     },
     "unscannable_file_policy": {

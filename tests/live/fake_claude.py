@@ -365,6 +365,13 @@ def main(argv):
     if "--plugin-dir" not in argv:
         print("LIVE_OK" if "LIVE_OK" in prompt else "ok")
         return 0
+    if "--setting-sources" not in argv or argv[argv.index("--setting-sources") + 1:][:1] != ["project,local"]:
+        print("fake_claude: live runs must isolate fixture settings with --setting-sources project,local",
+              file=sys.stderr)
+        return 2
+    if "--strict-mcp-config" in argv:
+        print("fake_claude: strict MCP config would hide the plugin's own MCP tools", file=sys.stderr)
+        return 2
     return Session(argv[argv.index("--plugin-dir") + 1], prompt).run()
 
 

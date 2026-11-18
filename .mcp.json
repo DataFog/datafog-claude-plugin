@@ -6,7 +6,8 @@
       "env": {
         "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
         "DATAFOG_DATA_DIR": "${DATAFOG_DATA_DIR:-}",
-        "DATAFOG_VAULT_DIR": "${DATAFOG_VAULT_DIR:-}"
+        "DATAFOG_VAULT_DIR": "${DATAFOG_VAULT_DIR:-}",
+        "DATAFOG_VAULT_KEY": "${DATAFOG_VAULT_KEY:-}"
       }
     }
   }

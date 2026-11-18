@@ -11,32 +11,85 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 import shapes_recorded as recorded
-from conftest import EMAIL, NOTES, SENTINELS, assert_no_sentinel, copy_vault
+from conftest import EMAIL, NOTES, SENTINELS, assert_no_sentinel, copy_vault, corrupt_vault, open_test_vault
 from datafog_guard.shapes import WITHHELD
-from datafog_guard.store import FileVaultStore
+from datafog_guard.store import FileLock
 from test_hook_protocol import same_shape
 
 
-def break_corrupt_pointer(box):
+def break_corrupt_vault_file(box):
     box.open_vault().tokenize(EMAIL)
-    (box.vault / "HEAD").write_text("{ this is not json")
+    path = box.vault / "workspace.enc"
+    raw = bytearray(path.read_bytes())
+    raw[-20] ^= 0xFF
+    path.write_bytes(bytes(raw))
 
 
-def break_corrupt_snapshot(box):
+def break_garbage_vault_file(box):
     box.open_vault().tokenize(EMAIL)
-    pointer = json.loads((box.vault / "HEAD").read_text())
-    snapshot = box.vault / "snapshots" / pointer["snapshot"]
-    raw = bytearray(snapshot.read_bytes())
-    raw[len(raw) // 2] ^= 0xFF
-    snapshot.write_bytes(bytes(raw))
+    corrupt_vault(box.vault, b"{ this is not a vault " + EMAIL.encode())
+
+
+def break_wrong_key(box):
+    box.open_vault().tokenize(EMAIL)
+    (box.vault / "workspace.key").write_bytes(bytes(range(32)))
+
+
+def break_missing_key(box):
+    box.open_vault().tokenize(EMAIL)
+    (box.vault / "workspace.key").unlink()
+
+
+def break_key_store_unavailable(box):
+    """The default: the key is kept in the OS key store, and there is none to reach.
+
+    Linux only: the Secret Service is looked for on a D-Bus address that does not exist. On macOS
+    this would talk to the real Keychain, which tests never do."""
+    if sys.platform != "linux":
+        pytest.skip("would use the real Keychain")
+    box.extra_env.update(DATAFOG_VAULT_KEY="keystore", DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent/datafog-test",
+                         XDG_RUNTIME_DIR=str(box.tmp / "no-runtime"))
+
+
+def break_key_setting_does_not_match_the_vault(box):
+    """A vault made with vault_key=file, opened with the default: refused before any key store is asked."""
+    box.open_vault().tokenize(EMAIL)
+    box.extra_env["DATAFOG_VAULT_KEY"] = "keystore"
+
+
+def break_vault_open_to_others(box):
+    box.open_vault().tokenize(EMAIL)
+    os.chmod(box.vault / "workspace.enc", 0o644)
+
+
+def break_vault_directory_is_a_link(box):
+    real = box.tmp / "elsewhere"
+    open_test_vault(real).tokenize(EMAIL)
+    box.vault.symlink_to(real)
+
+
+def break_vault_library_import(box):
+    fake = box.tmp / "fake" / "datafog_fogvault"
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text("raise ImportError('synthetic import failure')\n")
+    from conftest import ENGINE
+    box.extra_env["PYTHONPATH"] = f"{box.tmp / 'fake'}{os.pathsep}{ENGINE}"
+
+
+def break_unsupported_machine(box):
+    """No wheel for this machine: the vault library is not there, and the platform says why."""
+    break_vault_library_import(box)
+    (box.tmp / "fake" / "sitecustomize.py").write_text(
+        "import platform\nplatform.machine = lambda: 'riscv64'\n")
 
 
 def break_locked(box):
     box.open_vault().tokenize(EMAIL)
-    box._lock = FileVaultStore(str(box.vault)).lock()
+    box._lock = FileLock(str(box.vault / "workspace.lock"))
     box._lock.__enter__()
     box.extra_env["DATAFOG_LOCK_TIMEOUT"] = "0.2"
 
@@ -77,23 +130,23 @@ def break_config_not_json(box):
     (box.data / "config.json").write_text("allowlist: noreply@example.com")
 
 
-def break_recall_capacity(box):
-    from datafog_guard.vault import Detector, Vault
-    filler = Vault(FileVaultStore(str(box.vault)), Detector(("EMAIL",)), recall_required=False)
-    for start in range(0, 3500, 500):
-        filler._commit([("API_KEY", f"k{number:07d}" * 12) for number in range(start, start + 500)])
-
-
 BREAKS = {
-    "corrupt_pointer": break_corrupt_pointer,
-    "corrupt_snapshot": break_corrupt_snapshot,
+    "corrupt_vault_file": break_corrupt_vault_file,
+    "garbage_vault_file": break_garbage_vault_file,
+    "wrong_key": break_wrong_key,
+    "missing_key": break_missing_key,
+    "key_store_unavailable": break_key_store_unavailable,
+    "key_setting_does_not_match_the_vault": break_key_setting_does_not_match_the_vault,
+    "vault_open_to_others": break_vault_open_to_others,
+    "vault_directory_is_a_link": break_vault_directory_is_a_link,
+    "vault_library_import_failure": break_vault_library_import,
+    "unsupported_machine": break_unsupported_machine,
     "locked_vault": break_locked,
     "detector_import_failure": break_detector_import,
     "detector_finds_nothing": break_detector_blind,
     "unwritable_vault": break_unwritable_vault,
     "unsupported_entity_in_config": break_bad_config,
     "config_not_json": break_config_not_json,
-    "vault_past_recall_capacity": break_recall_capacity,
 }
 
 
@@ -104,7 +157,7 @@ def broken(box, request):
     lock = getattr(box, "_lock", None)
     if lock is not None:
         lock.__exit__(None, None, None)
-    if box.vault.is_dir():
+    if box.vault.is_dir() and not box.vault.is_symlink():
         os.chmod(box.vault, 0o700)
 
 

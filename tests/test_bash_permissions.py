@@ -1201,6 +1201,40 @@ def test_wildcard_allow_rules_do_not_approve_test_or_printf_forms_that_evaluate_
         assert decide(command, broad, cwd="/work/p").outcome == "allow", command
 
 
+@pytest.mark.parametrize("prefix,suffix", [("printf %d", ""), ("printf %f", ""),
+                                           ("printf '%*s'", " x"), ("exit", ""), ("test -v", "")])
+def test_quoted_arithmetic_cannot_bypass_restrictive_rules(tmp_path, prefix, suffix):
+    command = f"{prefix} 'path[$(touch {tmp_path / 'executed'})]'{suffix}"
+    for restrictive in (rules(allow=["Bash"], deny=["Bash(touch *)"]),
+                        rules(allow=[f"Bash({command})"], ask=["Bash(touch *)"])):
+        got = [decide(command, restrictive, mode=mode, cwd=str(tmp_path)) for mode in MODES]
+        assert [verdict.outcome for verdict in got] == ["ask", "ask", "ask", "ask", "deny", "ask"]
+    for mode in ("default", "acceptEdits"):
+        assert decide(command, rules(allow=["Bash"]), mode=mode, cwd=str(tmp_path)).outcome == "ask"
+        expected = "ask" if "*" in command else "allow"   # a literal * cannot make an exact permission rule
+        assert decide(command, rules(allow=[f"Bash({command})"]), mode=mode, cwd=str(tmp_path)).outcome == expected
+
+
+def test_zsh_executes_quoted_printf_and_exit_arithmetic(tmp_path):
+    """Exercise the shell behavior behind the deny-rule regression with its existing `path` array."""
+    zsh = shutil.which("zsh")
+    if not zsh:
+        pytest.skip("zsh is not installed")
+    sentinel = tmp_path / "executed"
+    for prefix in ("printf %d", "exit"):
+        command = f"{prefix} 'path[$(touch {sentinel})]'"
+        subprocess.run([zsh, "-f", "-c", command], capture_output=True, text=True, check=False)
+        assert sentinel.exists(), prefix
+        sentinel.unlink()
+
+
+def test_printf_text_formats_and_numeric_literals_still_follow_allow_rules():
+    found = rules(allow=["Bash"], deny=["Bash(touch *)"])
+    for command in ("printf '%s' 'path[$(touch PWNED)]'", "printf '%%d%s' text",
+                    "printf '%10.4s' text", "printf %d 7", "printf %f -1.25", "exit 0"):
+        assert decide(command, found, cwd="/work/p").outcome == "allow", command
+
+
 def test_many_directories_and_suffix_words_stay_fast_and_ask(tmp_path):
     """Review: `ls <7 directories> <19 KB of colon-suffix words>` took 2-5 s (words x suffixes x bases x
     rules x realpath). The product is bounded; past the bound the command is not cleared: firm ask."""
