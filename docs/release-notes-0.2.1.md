@@ -6,7 +6,9 @@ using these notes for a release or directory review.
 This candidate addresses the directory reviewer's exact-version requirement and fixes
 two cases where readable tool content could escape tokenization. It pins the detector
 and encrypted vault to version 1.7.0, scans MCP resource-link names/titles/descriptions,
-and hides stranded email-domain tails in joined Unicode text. Joined addresses may
+and hides stranded email-domain tails in joined Unicode text. Startup and runtime
+checks reject other installed versions, including after a failed upgrade; doctor
+reports version failures accurately. Joined addresses may
 become one marker; restoration remains byte-exact.
 
 The manifest now provides privacy, documentation and support links, accurate coverage
@@ -14,8 +16,16 @@ language and the official DataFog icon. MCP tools declare their effects. A separ
 CI job validates both plugin and marketplace manifests with an exact Claude Code version.
 Privacy and security reporting documentation explain local storage and remaining limits.
 
-MCP edit permission and concurrent-file safety changes are under final verification;
-their behavior and results must be included here after review.
+Marker-aware MCP edits now enforce Read/Edit deny and ask rules, refuse uncheckable
+settings, preserve internal symlink targets and reject intervening file/path changes.
+Bounded reads, pinned directories and advisory locks protect the normal edit flow;
+an unrelated writer can still race the final identity-check/rename boundary.
+
+Independent review reproduced and verified fixes for an alias-retarget permission
+race and repeated email-tail scanning. Cached 0.2.1 model sessions passed Read,
+Bash, marker-aware edit and outside-project refusal, with installed production-file
+hashes matching the candidate. The 0.2.0 → 0.2.1 upgrade retained marker identity.
+Full-suite and CI results remain to be attached below.
 
 ## Validation to attach
 

@@ -24,9 +24,12 @@ pytestmark = pytest.mark.skipif(
     reason="needs Linux with dbus-run-session, gnome-keyring-daemon and secret-tool (a private Secret Service)")
 
 SESSION = textwrap.dedent("""
-    printf 'synthetic-test-password\\n' | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1
+    set -e
+    printf 'synthetic-test-password\\n' | gnome-keyring-daemon --unlock --components=secrets \
+        --control-directory="$GNOME_KEYRING_CONTROL" >/dev/null 2>&1
     sleep 0.3
-    "$@"
+    test -S "$GNOME_KEYRING_CONTROL/control"
+    exec "$@"
 """)
 PRELUDE = textwrap.dedent("""
     import json, os, subprocess, sys
@@ -58,9 +61,14 @@ def in_private_key_store(tmp_path, script: str, timeout: int = 120) -> dict:
            "HOME": str(root / "home")}
     for name in ("data", "config", "cache", "run"):
         (root / name).mkdir(parents=True, exist_ok=True)
-        env["XDG_%s_%s" % (name.upper(), "DIR" if name == "run" else "HOME")] = str(root / name)
+        env["XDG_RUNTIME_DIR" if name == "run" else f"XDG_{name.upper()}_HOME"] = str(root / name)
     (root / "home").mkdir(exist_ok=True)
     os.chmod(root / "run", 0o700)
+    # gnome-keyring otherwise chooses a temporary control socket and prints its
+    # location. Pin it explicitly so the recovery request reaches this same private daemon.
+    control = root / "run" / "keyring"
+    control.mkdir(mode=0o700)
+    env["GNOME_KEYRING_CONTROL"] = str(control)
     result = subprocess.run(["dbus-run-session", "--", "sh", "-c", SESSION, "sh", sys.executable, "-c",
                              PRELUDE + textwrap.dedent(script), str(tmp_path)],
                             capture_output=True, text=True, env=env, timeout=timeout)
@@ -195,6 +203,10 @@ def test_locked_keyring_fails_closed_without_rekey_or_file_fallback(tmp_path):
         paths = re.findall(r"'(/[^']*)'", alias)
         assert len(paths) == 1 and paths[0] != "/", "the private default collection must exist"
         collection = paths[0]
+        found = call("/org/freedesktop/secrets", service + ".SearchItems",
+                     "{'service': '" + KEYSTORE_SERVICE + "'}")
+        item_paths = re.findall(r"'(/[^']*)'", found)
+        assert item_paths and all(path.startswith(collection + "/") for path in item_paths)
         assert not locked(), "the fixture must first create a usable unlocked keyring"
         call("/org/freedesktop/secrets", service + ".Lock", "['" + collection + "']")
         assert locked(), "a successful Lock call alone is not evidence that the keyring is locked"
@@ -225,8 +237,25 @@ def test_locked_keyring_fails_closed_without_rekey_or_file_fallback(tmp_path):
 
         # Unlock only this session's throwaway login collection, then prove the original
         # mapping still works; no developer login keyring or credential is involved.
-        subprocess.run(["gnome-keyring-daemon", "--unlock", "--components=secrets"],
-                       input=b"synthetic-test-password\n", capture_output=True, check=True, timeout=15)
+        assert result["code"] == "keystore_unavailable"
+        assert still_locked and unchanged and same_header and no_file_key
+
+        # --unlock starts a daemon; it does not unlock an already-running one.
+        # Use GNOME's control-client UNLOCK protocol against only the fixture socket:
+        # https://github.com/GNOME/gnome-keyring/blob/46.2/daemon/control/gkd-control-client.c
+        import socket, struct
+        password = b"synthetic-test-password\n"
+        packet = struct.pack(">III", 12 + len(password), 1, len(password)) + password
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+            control.settimeout(5)
+            control.connect(os.path.join(os.environ["GNOME_KEYRING_CONTROL"], "control"))
+            control.sendall(b"\0" + packet)  # credentials byte, then framed UNLOCK request
+            response = b""
+            while len(response) < 8:
+                chunk = control.recv(8 - len(response))
+                assert chunk, "private daemon closed its unlock response"
+                response += chunk
+        assert struct.unpack(">II", response) == (8, 0), "private daemon rejected unlock"
         assert not locked(), "the private collection did not unlock for the recovery check"
         recovered = vault(d).restore(marker).text == EMAIL
         print(json.dumps({"code": result["code"], "still_locked": still_locked,

@@ -44,3 +44,22 @@ Both checks passed. Local evidence directory:
 These remain direct cached-hook checks, not model sessions, and precede the later runtime
 version-enforcement fix. Final-release host startup and updated-candidate certification
 are still required.
+
+## Final production-file upgrade repeat
+
+After the dependency-enforcement fix, a fresh isolated configuration repeated the
+0.2.0 → 0.2.1 local-Git-marketplace upgrade against production files from `276b2b3`
+(runtime unchanged from `aa99659`). All engine, script, hook and MCP manifest hashes
+in the installed cache matched the candidate. Both cached startups were healthy,
+the synthetic marker remained identical, the exact-pin environment stamp matched,
+and uninstall removed plugin data while retaining the external temporary vault.
+
+Evidence and reproduction script:
+`/var/folders/kt/xxfb4y954tbfw5mpmgm4ybq00000gn/T/datafog-final-upgrade-6kn6fs2q`.
+An earlier repeat reused a development cache with the same 0.2.1 version and was
+rejected after hash comparison found stale files; it is not candidate evidence.
+Always use a fresh configuration or verify installed hashes when testing unreleased
+changes under one version number.
+
+Actual model sessions from the cached installation are separately documented in
+[installed candidate verification](2026-11-18-installed-candidate.md).

@@ -5,7 +5,7 @@ quoting around a marker; the value's owner chooses nothing; a value must never e
 
 A command with a marker is restored only if the WHOLE command fits a small positive grammar
 (plain.py, shellsub.py); everything else is refused. Three layers of proof, under real bash,
-zsh and dash:
+zsh and the actual /bin/sh fallback (dash on the Linux CI images):
   * every nasty value x every supported context, substituted and run by the shell directly;
   * random values over a hostile alphabet x every context;
   * the same contexts through the real runner (wrap.sh, launcher, filtercmd), which is what
@@ -27,9 +27,9 @@ from datafog_guard import bashwrap, shellsub
 from datafog_guard.shellsub import Refused, Span, substitute
 
 SHELLS = [shell for shell in ("bash", "zsh") if shutil.which(shell)]
-# The runner falls back to /bin/sh when neither bash nor zsh exists; the grammar is the same, and it is
-# checked against dash where it is installed.
-PLAIN_SH = [shell for shell in ("dash",) if shutil.which(shell)]
+# Exercise the runner's actual fallback, not an unrelated standalone shell. In particular,
+# macOS /bin/sh is bash, while Apple's standalone dash is not selected by pick_shell().
+PLAIN_SH = ["/bin/sh"] if os.access("/bin/sh", os.X_OK) else []
 
 
 def kind_of(shell: str) -> str:
@@ -569,7 +569,8 @@ def test_random_values_in_every_context(receivers, shell):
         result = run_shell(receivers, shell, "\n".join(lines) + "\nrc 37")
         assert result.returncode == 37, (name, result.stderr[-300:])
         for number, want in wanted.items():
-            assert receivers.got(number) == want, (name, repr(values[number]))
+            assert receivers.got(number) == want, (name, number, repr(values[number]),
+                                                  result.returncode, result.stderr[-2000:])
         assert receivers.side_effects() == [], name
         checked += len(wanted)
     assert checked > 280 * len(CONTEXTS)

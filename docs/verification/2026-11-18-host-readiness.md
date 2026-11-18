@@ -82,8 +82,9 @@ observations but do not certify the final source revision.
 - Alternate configuration-root trust handling, server-managed policy and MDM.
 - Locked/denied macOS Keychain, SSH/login/rebuilt-interpreter access; KWallet and
   locked Linux keyrings. Happy-path vault tests do not prove these states.
-- Actual installed marketplace startup, upgrade and MCP project-directory behavior
-  (the above loads the plugin by local directory).
+- Network-hosted marketplace startup and upgrade paths. A later
+  [cached installed candidate run](2026-11-18-installed-candidate.md) separately
+  verifies installed first start, all three examples and MCP project boundaries.
 - Other sandbox configurations/providers, including a vault outside the sandbox's
   allowed write paths. The macOS probe explicitly allowed its temporary data/vault.
 - Unsupported hardware/OS runtime behavior beyond mocked platform checks.
@@ -112,8 +113,9 @@ never hard-code them in a reviewer instruction.
    left on disk. Tool results contain no planted raw value. Automated assertion:
    `reviewer-mcp-edit`.
 
-These three examples passed on 2.1.327. Repeat them after the final marketplace
-install to close the distribution path separately from the local plugin path.
+These three examples passed on 2.1.327 and were subsequently repeated against the
+[installed cached candidate](2026-11-18-installed-candidate.md), closing that
+distribution-path check separately from the local plugin path.
 
 ## Harness validation
 

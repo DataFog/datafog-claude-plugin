@@ -8,19 +8,61 @@ Run after freezing the candidate: python3 tests/live/run_installed_readiness.py
 """
 import hashlib
 import json
+import os
 import pathlib
+import pty
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import uuid
 
 import run_live as live
 
 
+def trust_fixture(driver):
+    """Accept only this generated workspace's real host trust prompt; no model request."""
+    master, slave = pty.openpty()
+    process = subprocess.Popen(["claude", "--setting-sources", "project,local", "--ax-screen-reader", "--tools", ""],
+                               cwd=driver.project, env=driver.env(), stdin=slave, stdout=slave, stderr=slave,
+                               start_new_session=True)
+    os.close(slave)
+    transcript = bytearray()
+    accepted = False
+    deadline = time.monotonic() + 90
+    try:
+        while process.poll() is None and time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 1)
+            if ready:
+                try:
+                    transcript.extend(os.read(master, 65536))
+                except OSError:
+                    break
+            text = transcript.decode(errors="replace")
+            if not accepted and "Accessing workspace" in text and "Enter y/n:" in text:
+                os.write(master, b"y\r")
+                accepted = True
+            if accepted and "DataFog guard: on." in text:
+                return True
+        return False
+    finally:
+        pathlib.Path(driver.log, "fixture-trust-pty.txt").write_bytes(transcript)
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+        os.close(master)
+
+
 def main():
     source = pathlib.Path(live.REPO)
     work = pathlib.Path(tempfile.mkdtemp(prefix="datafog-installed."))
-    snapshot = work / "marketplace"
+    snapshot = work / "plugin-source"
     snapshot.mkdir()
     marketplace = "datafog-readiness-" + uuid.uuid4().hex[:12]
     plugin_id = "datafog@" + marketplace
@@ -36,13 +78,22 @@ def main():
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, destination)
         hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    catalog_path = snapshot / ".claude-plugin/marketplace.json"
-    catalog = json.loads(catalog_path.read_text())
+    subprocess.run(["git", "init", "-b", "readiness-fixture", str(snapshot)], check=True, capture_output=True)
+    subprocess.run(["git", "add", "--all"], cwd=snapshot, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=DataFog readiness fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-m", "Snapshot candidate for cached install verification"], cwd=snapshot, check=True, capture_output=True)
+    fixture_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=snapshot, text=True).strip()
+    catalog_root = work / "marketplace"
+    catalog_path = catalog_root / ".claude-plugin/marketplace.json"
+    catalog_path.parent.mkdir(parents=True)
+    catalog = json.loads((snapshot / ".claude-plugin/marketplace.json").read_text())
     catalog["name"] = marketplace
+    catalog["plugins"][0]["source"] = {"source": "url", "url": snapshot.as_uri(), "sha": fixture_sha}
     catalog_path.write_text(json.dumps(catalog, indent=2))
     provenance = {"revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip(),
                   "source_sha256": hashes, "marketplace": marketplace,
-                  "snapshot_change": "Only marketplace.name changed to avoid collisions with real installations."}
+                  "fixture_git_sha": fixture_sha,
+                  "snapshot_change": "Plugin files unchanged. Separate unique marketplace uses pinned local Git source to force cached execution."}
     (work / "provenance.json").write_text(json.dumps(provenance, indent=2))
     driver = live.Driver(str(work), "claude")
     driver.plugin_dir = None
@@ -63,7 +114,7 @@ def main():
         return result.stdout
 
     try:
-        command("marketplace-add", ["plugin", "marketplace", "add", str(snapshot), "--scope", "local", "--json"])
+        command("marketplace-add", ["plugin", "marketplace", "add", str(catalog_root), "--scope", "local", "--json"])
         command("install", ["plugin", "install", plugin_id, "--scope", "local", "--json"])
         plugins = json.loads(command("installed-list", ["plugin", "list", "--json"]))
         installed = next(p for p in plugins if p["id"] == plugin_id and p["scope"] == "local")
@@ -73,6 +124,9 @@ def main():
                                             for name, digest in hashes.items()
                                             if name.startswith(("engine/", "scripts/", "hooks/")) or name == ".mcp.json")
         report["fresh_bootstrap"] = not pathlib.Path(driver.data, "venv").exists()
+        report["interactive_first_start"] = trust_fixture(driver)
+        config = json.loads((pathlib.Path.home() / ".claude.json").read_text())
+        report["fixture_trust_recorded"] = config.get("projects", {}).get(str(pathlib.Path(driver.project).resolve()), {}).get("hasTrustDialogAccepted") is True
 
         def run(name, prompt, check):
             result = driver.run(name, prompt + " Do not retry a refused call or use alternative tools.")
@@ -107,7 +161,8 @@ def main():
                        "outside fixture unchanged": outside.read_text() == "ORIGINAL SYNTHETIC FIXTURE\n"})
     finally:
         for label, args in (("uninstall", ["plugin", "uninstall", plugin_id, "--scope", "local", "--json"]),
-                            ("marketplace-remove", ["plugin", "marketplace", "remove", marketplace, "--scope", "local", "--json"])):
+                            ("marketplace-remove", ["plugin", "marketplace", "remove", marketplace, "--scope", "local", "--json"]),
+                            ("purge-fixture-session", ["purge", driver.project, "--yes"])):
             try:
                 command(label, args)
                 report["cleanup"].append({"step": label, "success": True})
@@ -116,7 +171,7 @@ def main():
         remaining = json.loads(command("post-cleanup-list", ["plugin", "list", "--json"]))
         report["cleanup_verified"] = not any(p["id"] == plugin_id for p in remaining)
         (work / "installed-results.json").write_text(json.dumps(report, indent=2))
-    passed = report.get("cache_matches_source") and report.get("fresh_bootstrap") and len(report["cases"]) == 4
+    passed = report.get("cache_matches_source") and report.get("fresh_bootstrap") and report.get("interactive_first_start") and report.get("fixture_trust_recorded") and len(report["cases"]) == 4
     passed = passed and all(all(row["checks"].values()) for row in report["cases"]) and all(row["success"] for row in report["cleanup"]) and report["cleanup_verified"]
     raise SystemExit(0 if passed else 1)
 

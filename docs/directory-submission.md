@@ -10,7 +10,7 @@ The existing submission is already in the current portal: [DataFog review](https
 
 The September 23 check also reported warnings for publisher-name similarity, missing icon, a README download-and-run command, and hook usage. These are historical findings against the old commit, not results for today's candidate.
 
-Settings inspection found default-branch tracking, a populated private contact address, automatic publication enabled, and all three app surfaces selected. Authorized readiness changes were saved and verified: automatic publication **off**, **Claude Code only** (Cowork and Claude apps unchecked). No resubmission or publication occurred. Contact ownership has not been independently verified. The collection/transmission switch remains off: its helper specifically addresses remote MCP servers/HTTP hooks; final form answers must distinguish local sensitive-data storage from publisher collection.
+Settings inspection found default-branch tracking, a populated private contact address, automatic publication enabled, and all three app surfaces selected. Authorized readiness changes were saved and verified: automatic publication **off**, **Claude Code only** (Cowork and Claude apps unchecked). No resubmission or publication occurred. The contact address matches the user's authenticated Gmail profile, confirming mailbox access; no portal verification badge or test delivery was observed. The collection/transmission switch remains off: its helper specifically addresses remote MCP servers/HTTP hooks; final form answers must distinguish local sensitive-data storage from publisher collection.
 Keep auto-publish off. Select a release tag containing the reviewed commit, record its SHA, and run portal validation against that exact revision. Local CLI success is not portal approval. Submission, security scanning, reviewer approval and publication are separate states; passing checks does not itself publish a version. Record each result and the public listing URL after publication. [Submission lifecycle](https://claude.com/docs/plugins/submit).
 
 ## Repository evidence
@@ -30,10 +30,10 @@ Keep auto-publish off. Select a release tag containing the reviewed commit, reco
 | --- | --- | --- |
 | D01 | Existing submission found; resume it rather than migrate or duplicate. Reconfirm push access at resubmission. | Portal ID/status recorded above; no migration needed. |
 | D02 | PRIVACY.md and manifest link added locally; publish with reviewed release. | Public policy URL must resolve after push and match final behavior. |
-| D03 | Support URL added; SECURITY.md and private GitHub vulnerability reporting enabled. Contact populated in portal; mailbox verification remains unproven. | Root verified GitHub private reporting API; confirm final public docs and reachable contact. |
+| D03 | Support URL added; SECURITY.md and private GitHub vulnerability reporting enabled. Portal contact matches authenticated Gmail profile. | Mailbox access confirmed; final public-doc URLs await merge. No test email was sent or portal badge claimed. |
 | D04 | Provide three runnable synthetic reviewer examples. | Read/tokenization, Bash output filtering, marker-aware edit; expected output and disk-state assertions. |
 | D05 | MCP annotations added by implementation workstream. | Focused MCP tests pass; final integrated suite still required. |
-| D06 | Narrow all listing claims to detected values and disclosed limits. | Manifest, marketplace, GitHub About text, homepage and README agree. Manifest descriptions were narrowed in this audit; GitHub About still calls it an offline PII firewall. |
+| D06 | Narrow all listing claims to detected values and disclosed limits. | Manifest, marketplace, README and GitHub About now describe detected values. Homepage release-copy update is drafted for publication; directory availability is not announced. |
 | D07 | Portal now restricted to Claude Code; keep unsupported app claims out of listing. | Settings saved and verified Code on, Cowork/apps off. |
 | D08 | Run a clean cached marketplace install, upgrade and uninstall scenario. | Exact release installed outside source checkout; hooks and MCP start; settings and vault retention behave as documented. |
 | D09 | Establish dependency provenance/reproducibility and bootstrap failure coverage. | Exact resolved distributions, source/index behavior and network needs recorded; cold install succeeds on both supported platforms. |
@@ -94,3 +94,22 @@ Use only a throwaway project/vault and the committed synthetic fixtures.
 3. Ask Claude to use `edit_with_markers` to change a non-sensitive field on a row identified by a marker. Confirm the real original value remains on disk and the tool result contains only line numbers/counts.
 
 Release evidence should attach concrete prompts, observed outputs and assertions for these examples, plus interactive permission and cancellation results tracked by the verification workstream.
+
+## Prepared response to the earlier review
+
+Use only after the final candidate and public URLs are verified; this text has not
+been sent or entered as a submission:
+
+> Version 0.2.1 pins the two runtime distributions to datafog-core==1.7.0 and
+> datafog-fogvault==1.7.0. No optional extras or transitive Python distributions are
+> installed. Bootstrap verifies installed versions even when its stamp already exists;
+> runtime loading and doctor also validate the reviewed versions. A failed upgrade
+> cannot silently launch an older environment. The repository includes privacy and
+> security-reporting documentation, an official icon, and three synthetic reviewer
+> examples exercised from an installed plugin cache. Support is limited to Claude
+> Code on the documented macOS/Linux platforms. Please review the final release
+> revision and its attached validation evidence; the coverage limits are explicit.
+
+Before sending, replace any version/revision references if the candidate changes,
+attach the observed release URL and final CI/live report, and retain automatic
+publication off. No reviewer acceptance is implied by this draft.
